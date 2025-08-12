@@ -216,6 +216,7 @@
 <script>
 import { isOffline, saveOfflineCustomer } from "../../../offline/index.js";
 
+const DEFAULT_COUNTRY = "Colombia";
 export default {
 	data: () => ({
 		customerDialog: false,
@@ -227,7 +228,7 @@ export default {
 		mobile_no: "",
 		address_line1: "",
 		city: "",
-		country: "Pakistan",
+		country: DEFAULT_COUNTRY,
 		email_id: "",
 		referral_code: "",
 		birthday: "",
@@ -358,7 +359,7 @@ export default {
 			this.mobile_no = "";
 			this.address_line1 = "";
 			this.city = "";
-			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
+			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
 			this.email_id = "";
 			this.referral_code = "";
 			this.birthday = "";
@@ -609,7 +610,7 @@ export default {
 				this.address_line1 = data.address_line1 || "";
 				this.city = data.city || "";
 				this.country =
-					data.country || (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
+					data.country || (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
 				this.tax_id = data.tax_id;
 				this.mobile_no = data.mobile_no;
 				this.email_id = data.email_id;
@@ -621,16 +622,16 @@ export default {
 				this.loyalty_program = data.loyalty_program;
 				this.gender = data.gender;
 			} else {
-				this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
+				this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
 			}
 		});
 		this.eventBus.on("register_pos_profile", (data) => {
 			this.pos_profile = data.pos_profile;
-			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
+			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
 		});
 		this.eventBus.on("payments_register_pos_profile", (data) => {
 			this.pos_profile = data.pos_profile;
-			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
+			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
 		});
 		this.getCustomerGroups();
 		this.getCustomerTerritorys();
