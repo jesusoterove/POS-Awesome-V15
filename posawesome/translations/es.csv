@@ -1,5 +1,6 @@
 "Yes, Cancel sale","Si, cancelar venta"
 "Yes, Close","Si, cerrar"
+{0} sales persons found,{0} vendedores encontrados
 About,Acerca de
 Account,"Cuenta"
 Account Head,Cuenta padre
@@ -26,7 +27,7 @@ Allow Return,Permitir Devolución
 Allow Submissions in background job,Permitir Envío en segundo plano
 Allow user to edit Additional Discount,Permitir Editar Descuento Adicional
 Allow User to Edit Item Discount,Permitir Editar Descuento
-Allow user to edit Rate,Permitir Editar Tarifa
+Allow user to edit Rate,Permitir Editar Precio
 Always fetch items from server,Siempre cargar artículos desde el servidor
 Always fetch items from server (ignore local cache),Siempre cargar artículos desde el servidor (ignorar caché local)
 Amended From,Modificado desde
@@ -47,15 +48,15 @@ Auto Apply,Auto aplicar
 Auto Delete Draft Invoice,Auto eliminar factura borrador
 Auto Set Batch,Auto asignar lote
 Available,Disponible
-Available QTY,Cantidad Disponible
+Available QTY,Disponible
 Awesome,Awesome
 Back,Volver
 Balance will be updated when connection is restored,El saldo se actualizará cuando se restablezca la conexión
 Basic Information,Información básica
-Batch Information,Información de lote
-Batch No,Número de Lote 
-Batch No Available QTY,Cantidad Disponible del Lote
-Batch No Expiry Date,Fecha de Vencimiento del Lote
+Batch Information,Información de Lote
+Batch No,Lote No
+Batch No Available QTY,Lote No Disponible
+Batch No Expiry Date,Fecha de Vencimiento Lote No
 Brand,Marca
 Breakdown,Desglose
 Built with Frappe,Desarrollado con Frappe
@@ -96,7 +97,7 @@ Close Scanner,Cerrar Escáner
 Close Shift,Cerrar Turno
 Closed,Cerrado
 Closing,Cerrando
-Closing Amount,Cantidad de Cierre
+Closing Amount,Valor de Cierre
 Closing POS Shift,Cerrando Turno POS
 Code,Código
 Code scanned successfully,Código escaneado correctamente
@@ -116,7 +117,7 @@ CPU Load,Carga de CPU
 Create Customer,Crear Cliente
 Create Only Sales Order,Crear Solo Orden de Venta
 Create POS Opening Shift,Crear Turno de Apertura POS
-Credit Change,Cambio de Crédito
+Credit Change,Cambio
 Current Event Loop Lag,Event-Loop Lag Actual
 Custom Due Days,Días de Vencimiento Personalizados
 Custom items per page,Artículos por página personalizados
@@ -154,10 +155,11 @@ Detecting formats,Detectando formatos
 Device Memory,Memoria del Dispositivo
 Difference,Diferencia
 Disable,Deshabilitar
+Disable auto setting Grand Total to default Payment Mode,Deshabilitar auto calcular Valor Total en el método de pago por defecto
 Disable offline mode,Deshabilitar modo sin conexión
 Discount %,Descuento %
-Discount Amount,Cantidad de Descuento
-Discount Percentage,Porcentaje de Descuento
+Discount Amount,Valor Descuento
+Discount Percentage,Descuento %
 Discount Type,Tipo de Descuento
 Draft,Borrador
 Due Date,Fecha de Vencimiento
@@ -178,12 +180,12 @@ Error submitting invoice No response from server,Error al enviar factura No hay 
 Error toggling item details,Error al alternar detalles del artículo
 Error updating item details,Error al actualizar detalles del artículo
 Event-loop lag measures how busy your browser is. Lower is better.,El Event-Loop lag mide qué tan ocupado está tu navegador. Menor es mejor.
-Expected Amount,Cantidad Esperada
+Expected Amount,Valor Esperado
 Failed to change language,Error al cambiar el idioma
 Failed to clear cache,Error al limpiar caché
 Failed to load items. Please try again.,Error al cargar artículos. Por favor, inténtelo de nuevo.
 Fetch Items Directly from Server,Obtener artículos directamente del servidor
-Fixing payment amounts for return invoice,Corregir cantidades de pago para factura de devolución
+Fixing payment amounts for return invoice,Corregir valor pagado para devoluciones
 Flash Off,Apagar Flash
 Flash On,Encender Flash
 For POS Closing Shift Payment Reconciliation,Para Reconciliación de Pago Cierre POS
@@ -197,7 +199,7 @@ Given Quantity,Cantidad en Oferta
 Go Offline,Desconectar
 Go Online,Conectar
 Go Online/Offline,Conectar/Desconectar
-Grand Amount,Cantidad Final
+Grand Amount,Valor Final
 Grand Total,Gran Total
 Group,Grupo
 Group not found,Grupo no encontrado
@@ -206,7 +208,7 @@ Hide Non Essential Fields,Ocultar Campos No Esenciales
 Hide quantity decimals,Ocultar decimales en cantidad
 Hide Unavailable Items,Ocultar Artículos No Disponibles
 Hide Variants Items,Ocultar Variantes de Artículos
-Hide zero rated items,Ocultar artículos con tarifa cero
+Hide zero rated items,Ocultar artículos con precio cero
 HOLD,EN ESPERA
 Hold,En Espera
 Increase,Aumentar
@@ -214,7 +216,7 @@ IndexedDB,IndexedDB
 Initialize your shift with opening balances,Inicializar tu turno con saldos de apertura
 Initializing application...,Inicializando aplicación...
 Installed Applications,Aplicaciones Instaladas
-Invalid closing amount,Cantidad de cierre inválida
+Invalid closing amount,Valor de cierre inválida
 Invalid Period,Período inválido
 Invoice,Factura
 Invoice {0} Deleted,Factura {0} Eliminada
@@ -230,7 +232,7 @@ Item not found,Artículo no encontrado
 Item order updated,Orden de artículo actualizado
 Item Price,Precio de Artículo
 Item price updated,Precio de artículo actualizado
-Item Rate Should Less Then,La tarifa de artículo debe ser menor que
+Item Rate Should Less Then,El precio del artículo debe ser menor que
 Item Selector Settings,Configuración de Selector de Artículos
 Items,Artículos
 Items Discounts,Descuentos de Artículos
@@ -283,7 +285,7 @@ Net Total,Total Neto
 NEW,NUEVO
 New Customer,Nuevo Cliente
 New Offer Available,Nueva Oferta Disponible
-New Price List Rate,Nueva Tarifa de Lista de Precios
+New Price List Rate,Nuevo Precio de Lista de Precios
 No camera found on this device.,Cámara no encontrada en este dispositivo
 No invoices found,No se encontraron facturas
 No invoices found. Try different search criteria.,No se encontraron facturas. Intenta diferentes criterios de búsqueda.
@@ -298,14 +300,14 @@ Offer Name,Nombre de Oferta
 Offers,Ofertas
 Offline Invoices,Facturas Sin Conexión
 Open,Abrir
-Opening Amount,Cantidad de Apertura
+Opening Amount,Valor de Apertura
 Opening Balance Details,Detalles de Saldo de Apertura
 Order,Orden
 Outstanding,Pendiente
 Pages,Páginas
 Paid,Pagado
-Paid Amount,Valor Pagada
-Paid Change,Devuelta
+Paid Amount,Valor Pagado
+Paid Change,Cambio
 PAY,PAGAR
 Payment ID,ID de Pago
 Payment Methods,Métodos de Pago
@@ -353,7 +355,7 @@ Position the QR code or barcode within the scanning area,Posicione el código QR
 Posting Date,Fecha de Asiento
 Price,Precio
 Price Discount Scheme ,Esquema de Descuentos de Precio
-Price list Rate,Tarifa de Lista de Precios
+Price list Rate,Precio de Lista de Precios
 Pricing & Discounts,Precios y Descuentos
 Print Draft,Imprimir Borrador
 Print Last Invoice,Imprimir Última Factura
@@ -363,9 +365,9 @@ Product Discount Scheme,Esquema de Descuentos de Producto
 Promo Type,Tipo de Promoción
 QTY,Cantidad
 Qualifying Transaction / Item,
-Quantity and Amount Conditions,Condiciones de Cantidad y Valor
+Quantity and Amount Conditions,Condiciones de Cantidad y Precio
 Quick Actions,Acciones Rápidas
-Rate,Tarifa
+Rate,Precio
 Ready!,Listo!
 Reconcile payment methods and close shift,Reconciliar métodos de pago y cerrar turno
 Referral Code,Código de Referencia
@@ -433,7 +435,7 @@ Status,Estado
 Status must be one of {0},El estado debe ser uno de {0}
 Stock Information,Información de Stock
 Stock QTY,Cantidad en Stock
-Stock UOM,Unidad de Medida de Stock
+Stock UOM,UdM de Stock
 Submit,Enviar
 Submit & Print,Enviar e Imprimir
 Submit Payments,Registrar Pagos
@@ -464,6 +466,7 @@ These invoices will be synced when connection is restored,Estas facturas se sinc
 This coupon already used !,Este cupón ya ha sido usado !
 This invoice {0} cannot be deleted,Esta factura {0} no puede ser eliminada
 This is an item template. Please choose a variant.,Este es un artículo plantilla. Por favor, elija una variante.
+This would cancel and delete the current sale. To save it as Draft, click the "Save and Clear" instead.,
 Time,Tiempo
 Tip Clear cache regularly to free up space and keep the app fast.,Consejo: Limpiar la caché regularmente para liberar espacio y mantener la aplicación rápida.
 Tip Close unused tabs or apps to reduce lag.,Consejo: Cerrar pestañas o aplicaciones inactivas para reducir la latencia.
@@ -477,6 +480,7 @@ Total Amount,Valor Total
 Total Invoices,Total de Facturas
 Total Mpesa,Total Mpesa
 Total Outstanding,Total Pendiente
+Total Paid Amount,Total Pagado
 Total Payments,Total de Pagos
 Total Qty,Cantidad Total
 Total Quantity,Cantidad Total
@@ -505,7 +509,7 @@ User {} has been disabled. Please select valid user/cashier,El usuario {} ha sid
 Using cached customer balance,Usando saldo de cliente en caché
 Valid From,Válido Desde
 Valid Upto,Válido Hasta
-Verify closing amounts for each payment method,Verificar cantidades de cierre para cada método de pago
+Verify closing amounts for each payment method,Verificar valores de cierre para cada método de pago
 Waiting for payment,Esperando pago
 Warehouse,Almacén
 Warning High cache usage may affect performance.,Advertencia: El uso alto de caché puede afectar el rendimiento.
