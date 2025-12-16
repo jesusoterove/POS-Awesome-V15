@@ -291,6 +291,9 @@ def update_invoice(data):
             invoice_doc.customer_name = cust.customer_name
         except Exception as e:
             frappe.log_error(f"Failed to create customer {customer_name}: {e}")
+    else:
+        invoice_doc.customer = customer_name
+        invoice_doc.customer_name = customer_name
 
     # Preserve provided item names for manual overrides
     overrides = {d.idx: {"item_name": d.item_name} for d in invoice_doc.items}
