@@ -282,6 +282,10 @@ Multiple Items Found,Multiples Artículos Encontrados
 Name,Nombre
 Negative values not allowed,Valores negativos no permitidos
 Net Total,Total Neto
+Fetch Items Directly from Server,Obtener artículos directamente del servidor
+RETURN,DEVOLUCIÓN
+Return,Devolución
+CANCEL,CANCELAR
 NEW,NUEVO
 New Customer,Nuevo Cliente
 New Offer Available,Nueva Oferta Disponible
@@ -503,16 +507,38 @@ Usage Stats,Estadísticas de Uso
 Use Browser Local Storage,Usar Almacenamiento Local del Navegador
 Use Cashback,Usar Cashback
 Use Customer Credit,Usar Crédito del Cliente
-Use date range to search for older invoices,Usar rango de fechas para buscar facturas antiguas
-Used,Usado
-User {} has been disabled. Please select valid user/cashier,El usuario {} ha sido deshabilitado. Por favor, seleccione un usuario/cajero válido
-Using cached customer balance,Usando saldo de cliente en caché
-Valid From,Válido Desde
-Valid Upto,Válido Hasta
-Verify closing amounts for each payment method,Verificar valores de cierre para cada método de pago
-Waiting for payment,Esperando pago
-Warehouse,Almacén
-Warning High cache usage may affect performance.,Advertencia: El uso alto de caché puede afectar el rendimiento.
-Warning High lag may indicate heavy processing or browser slowness.,Advertencia: La latencia alta puede indicar un procesamiento pesado o una lentitud del navegador.
+Is Credit Sale,Es Venta a Crédito
+Due Date,Fecha de Vencimiento
+Menu,Menú
+Actions,Acciones
+Close Shift,Cerrar Turno
+End current session,Finalizar sesión actual
+Print Last Invoice,Imprimir Última Factura
+Reprint previous transaction,Reimprimir transacción anterior
+Sync Offline Invoices,Sincronizar Facturas Sin Conexión
+Upload pending transactions,Subir transacciones pendientes
+Go Online,Conectarse
+Go Offline,Desconectarse
+Disable offline mode,Deshabilitar modo sin conexión
 Work without server connection,Trabajar sin conexión al servidor
-"Yes, Cancel sale","Si, Cancelar venta"
+Clear Cache,Limpiar Caché
+Remove local data and refresh,Eliminar datos locales y actualizar
+About,Acerca de
+App information,Información de la aplicación
+Language,Idioma
+Change interface language,Cambiar idioma de la interfaz
+Light Mode,Modo Claro
+Dark Mode,Modo Oscuro
+Switch theme appearance,Cambiar apariencia del tema
+Logout,Cerrar Sesión
+Sign out of session,Cerrar sesión
+Select Language,Seleccionar Idioma
+Choose your preferred language for the POS interface,Elige tu idioma preferido para la interfaz POS
+Language will be changed to,El idioma se cambiará a
+Cancel,Cancelar
+Change Language,Cambiar Idioma
+Close,Cerrar
+Cannot change language - same language selected,No se puede cambiar el idioma - mismo idioma seleccionado
+Language changed successfully! Reloading...,¡Idioma cambiado exitosamente! Recargando...
+Failed to change language,Error al cambiar el idioma
+Unknown error,Error desconocido

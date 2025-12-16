@@ -23,9 +23,8 @@
 									density="compact"
 									color="primary"
 									:label="frappe._('Customer Name') + ' *'"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
 									hide-details
-									class="dark-field"
+									class="pos-themed-input"
 									v-model="customer_name"
 								></v-text-field>
 							</v-col>
@@ -34,8 +33,7 @@
 									density="compact"
 									color="primary"
 									:label="frappe._('Tax ID')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 									hide-details
 									v-model="tax_id"
 								></v-text-field>
@@ -45,8 +43,7 @@
 									density="compact"
 									color="primary"
 									:label="frappe._('Mobile No')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 									hide-details
 									v-model="mobile_no"
 								></v-text-field>
@@ -56,9 +53,8 @@
 									density="compact"
 									color="primary"
 									:label="__('Address Line 1')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
 									hide-details
-									class="dark-field"
+									class="pos-themed-input"
 									v-model="address_line1"
 								></v-text-field>
 							</v-col>
@@ -69,8 +65,7 @@
 									variant="outlined"
 									density="compact"
 									:label="__('City')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 								></v-text-field>
 							</v-col>
 
@@ -81,8 +76,7 @@
 									variant="outlined"
 									density="compact"
 									:label="__('Country')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 								></v-select>
 							</v-col>
 
@@ -91,8 +85,7 @@
 									density="compact"
 									color="primary"
 									:label="frappe._('Email Id')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 									hide-details
 									v-model="email_id"
 								></v-text-field>
@@ -103,8 +96,7 @@
 									label="Gender"
 									:items="genders"
 									v-model="gender"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 								></v-select>
 							</v-col>
 							<v-col cols="6">
@@ -112,8 +104,7 @@
 									density="compact"
 									color="primary"
 									:label="frappe._('Referral Code')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 									hide-details
 									v-model="referral_code"
 								></v-text-field>
@@ -128,8 +119,7 @@
 									color="primary"
 									placeholder="DD-MM-YYYY"
 									@update:model-value="formatBirthdayOnInput"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 								></v-text-field>
 							</v-col>
 							<v-col cols="6" v-if="!hideNonEssential">
@@ -141,8 +131,7 @@
 									:label="frappe._('Customer Group') + ' *'"
 									v-model="group"
 									:items="groups"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 									:no-data-text="__('Group not found')"
 									hide-details
 									required
@@ -158,8 +147,7 @@
 									:label="frappe._('Territory') + ' *'"
 									v-model="territory"
 									:items="territorys"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 									:no-data-text="__('Territory not found')"
 									hide-details
 									required
@@ -173,8 +161,7 @@
 									density="compact"
 									readonly
 									hide-details
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 								></v-text-field>
 							</v-col>
 							<v-col cols="6" v-if="loyalty_points">
@@ -184,8 +171,7 @@
 									density="compact"
 									readonly
 									hide-details
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-									class="dark-field"
+									class="pos-themed-input"
 								></v-text-field>
 							</v-col>
 						</v-row>
@@ -224,8 +210,8 @@
 
 <script>
 import { isOffline, saveOfflineCustomer } from "../../../offline/index.js";
+import { useCustomersStore } from "../../stores/customersStore.js";
 
-const DEFAULT_COUNTRY = "Colombia";
 export default {
 	data: () => ({
 		customerDialog: false,
@@ -237,7 +223,7 @@ export default {
 		mobile_no: "",
 		address_line1: "",
 		city: "",
-		country: DEFAULT_COUNTRY,
+		country: "Pakistan",
 		email_id: "",
 		referral_code: "",
 		birthday: "",
@@ -253,7 +239,43 @@ export default {
 		loyalty_program: null,
 		hideNonEssential: false,
 		countries: [
-			"Colombia",
+			"Afghanistan",
+			"Australia",
+			"Bahrain",
+			"Bangladesh",
+			"Canada",
+			"China",
+			"Denmark",
+			"France",
+			"Germany",
+			"India",
+			"Indonesia",
+			"Italy",
+			"Japan",
+			"Kuwait",
+			"Malaysia",
+			"Nepal",
+			"Netherlands",
+			"New Zealand",
+			"Norway",
+			"Oman",
+			"Pakistan",
+			"Philippines",
+			"Qatar",
+			"Saudi Arabia",
+			"Singapore",
+			"South Korea",
+			"Spain",
+			"Sri Lanka",
+			"Sweden",
+			"Switzerland",
+			"Syria",
+			"Thailand",
+			"United Arab Emirates",
+			"United Kingdom",
+			"United States",
+			"Vietnam",
+			"Yemen",
 		],
 	}),
 	watch: {
@@ -314,11 +336,7 @@ export default {
 			}
 		},
 	},
-	computed: {
-		isDarkTheme() {
-			return this.$theme.current === "dark";
-		},
-	},
+	computed: {},
 	methods: {
 		// Add a new method to update calendar date
 		updateCalendarDate(day, month, year) {
@@ -374,7 +392,7 @@ export default {
 			this.mobile_no = "";
 			this.address_line1 = "";
 			this.city = "";
-			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
+			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
 			this.email_id = "";
 			this.referral_code = "";
 			this.birthday = "";
@@ -450,7 +468,7 @@ export default {
 				}
 			}
 		},
-		submit_dialog() {
+		async submit_dialog() {
 			const vm = this;
 			if (!this.customer_name) {
 				frappe.throw(__("Customer Name is required"));
@@ -543,12 +561,20 @@ export default {
 				method: this.customer_id ? "update" : "create",
 			};
 
+			const customersStore = useCustomersStore();
+
 			if (isOffline()) {
 				saveOfflineCustomer({ args: apiArgs });
 				vm.eventBus.emit("show_message", { title: __("Customer saved offline"), color: "warning" });
 				args.name = this.customer_name;
-				vm.eventBus.emit("add_customer_to_list", args);
-				vm.eventBus.emit("set_customer", args.name);
+				await customersStore.addOrUpdateCustomer({
+					name: args.name,
+					customer_name: args.customer_name,
+					mobile_no: args.mobile_no,
+					email_id: args.email_id,
+					tax_id: args.tax_id,
+					primary_address: args.address_line1,
+				});
 				vm.close_dialog();
 				return;
 			}
@@ -556,7 +582,7 @@ export default {
 			frappe.call({
 				method: "posawesome.posawesome.api.customers.create_customer",
 				args: apiArgs,
-				callback: (r) => {
+				callback: async (r) => {
 					if (!r.exc && r.message.name) {
 						let text = __("Customer created successfully.");
 						if (vm.customer_id) {
@@ -568,9 +594,14 @@ export default {
 						});
 						args.name = r.message.name;
 						frappe.utils.play_sound("submit");
-						vm.eventBus.emit("add_customer_to_list", args);
-						vm.eventBus.emit("set_customer", r.message.name);
-						vm.eventBus.emit("fetch_customer_details");
+						await customersStore.addOrUpdateCustomer({
+							name: args.name,
+							customer_name: args.customer_name,
+							mobile_no: args.mobile_no,
+							email_id: args.email_id,
+							tax_id: args.tax_id,
+							primary_address: args.address_line1,
+						});
 						vm.close_dialog();
 					} else {
 						frappe.utils.play_sound("error");
@@ -631,7 +662,7 @@ export default {
 				this.address_line1 = data.address_line1 || "";
 				this.city = data.city || "";
 				this.country =
-					data.country || (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
+					data.country || (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
 				this.tax_id = data.tax_id;
 				this.mobile_no = data.mobile_no;
 				this.email_id = data.email_id;
@@ -643,16 +674,16 @@ export default {
 				this.loyalty_program = data.loyalty_program;
 				this.gender = data.gender;
 			} else {
-				this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
+				this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
 			}
 		});
 		this.eventBus.on("register_pos_profile", (data) => {
 			this.pos_profile = data.pos_profile;
-			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
+			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
 		});
 		this.eventBus.on("payments_register_pos_profile", (data) => {
 			this.pos_profile = data.pos_profile;
-			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || DEFAULT_COUNTRY;
+			this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
 		});
 		this.getCustomerGroups();
 		this.getCustomerTerritorys();
@@ -664,34 +695,4 @@ export default {
 };
 </script>
 
-<style scoped>
-/* Dark mode input styling */
-:deep([data-theme="dark"]) .dark-field,
-:deep(.v-theme--dark) .dark-field,
-::v-deep([data-theme="dark"]) .dark-field,
-::v-deep(.v-theme--dark) .dark-field {
-	background-color: #1e1e1e !important;
-}
-
-:deep([data-theme="dark"]) .dark-field :deep(.v-field__input),
-:deep(.v-theme--dark) .dark-field :deep(.v-field__input),
-:deep([data-theme="dark"]) .dark-field :deep(input),
-:deep(.v-theme--dark) .dark-field :deep(input),
-:deep([data-theme="dark"]) .dark-field :deep(.v-label),
-:deep(.v-theme--dark) .dark-field :deep(.v-label),
-::v-deep([data-theme="dark"]) .dark-field .v-field__input,
-::v-deep(.v-theme--dark) .dark-field .v-field__input,
-::v-deep([data-theme="dark"]) .dark-field input,
-::v-deep(.v-theme--dark) .dark-field input,
-::v-deep([data-theme="dark"]) .dark-field .v-label,
-::v-deep(.v-theme--dark) .dark-field .v-label {
-	color: #fff !important;
-}
-
-:deep([data-theme="dark"]) .dark-field :deep(.v-field__overlay),
-:deep(.v-theme--dark) .dark-field :deep(.v-field__overlay),
-::v-deep([data-theme="dark"]) .dark-field .v-field__overlay,
-::v-deep(.v-theme--dark) .dark-field .v-field__overlay {
-	background-color: #1e1e1e !important;
-}
-</style>
+<style scoped></style>

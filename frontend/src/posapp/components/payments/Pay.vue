@@ -3,11 +3,7 @@
 		<v-row v-show="!dialog">
 			<v-col md="8" cols="12" class="pb-2 pr-0">
 				<v-card
-					:class="[
-						'main mx-auto mt-3 p-3 pb-16 overflow-y-auto',
-						isDarkTheme ? '' : 'bg-grey-lighten-5',
-					]"
-					:style="isDarkTheme ? 'background-color:#1E1E1E' : ''"
+					class="main mx-auto mt-3 p-3 pb-16 overflow-y-auto pos-themed-card"
 					style="max-height: 94vh; height: 94vh"
 				>
 					<Customer></Customer>
@@ -42,8 +38,7 @@
 									variant="outlined"
 									hide-details
 									clearable
-									class="dark-field"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
+									class="pos-themed-input"
 									v-model="pos_profile_search"
 									:items="pos_profiles_list"
 									item-value="name"
@@ -177,9 +172,8 @@
 									variant="outlined"
 									color="primary"
 									:label="frappe._('Search by Name')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
+									class="pos-themed-input"
 									hide-details
-									class="dark-field"
 									v-model="mpesa_search_name"
 									clearable
 								></v-text-field>
@@ -190,9 +184,8 @@
 									variant="outlined"
 									color="primary"
 									:label="frappe._('Search by Mobile')"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
+									class="pos-themed-input"
 									hide-details
-									class="dark-field"
 									v-model="mpesa_search_mobile"
 									clearable
 								></v-text-field>
@@ -231,8 +224,7 @@
 			</v-col>
 			<v-col md="4" cols="12" class="pb-3">
 				<v-card
-					:class="['invoices mx-auto mt-3 p-3', isDarkTheme ? '' : 'bg-grey-lighten-5']"
-					:style="isDarkTheme ? 'background-color:#1E1E1E' : ''"
+					class="invoices mx-auto mt-3 p-3 pos-themed-card"
 					style="max-height: 94vh; height: 94vh"
 				>
 					<strong>
@@ -243,10 +235,9 @@
 							</v-col>
 							<v-col md="5">
 								<v-text-field
-									class="p-0 m-0 dark-field"
+									class="p-0 m-0 pos-themed-input"
 									density="compact"
 									color="primary"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
 									hide-details
 									:model-value="formatCurrency(total_selected_invoices)"
 									readonly
@@ -265,10 +256,9 @@
 							>
 							<v-col md="5">
 								<v-text-field
-									class="p-0 m-0 dark-field"
+									class="p-0 m-0 pos-themed-input"
 									density="compact"
 									color="primary"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
 									hide-details
 									:model-value="formatCurrency(total_selected_payments)"
 									readonly
@@ -284,10 +274,9 @@
 							>
 							<v-col md="5">
 								<v-text-field
-									class="p-0 m-0 dark-field"
+									class="p-0 m-0 pos-themed-input"
 									density="compact"
 									color="primary"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
 									hide-details
 									:model-value="formatCurrency(total_selected_mpesa_payments)"
 									readonly
@@ -314,10 +303,9 @@
 											{{ currencySymbol(pos_profile.currency) }}
 										</div>
 										<v-text-field
-											class="p-0 m-0 dark-field"
+											class="p-0 m-0 pos-themed-input"
 											density="compact"
 											color="primary"
-											:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
 											hide-details
 											v-model="method.amount"
 											type="number"
@@ -336,10 +324,9 @@
 							</v-col>
 							<v-col md="5">
 								<v-text-field
-									class="p-0 m-0 dark-field"
+									class="p-0 m-0 pos-themed-input"
 									density="compact"
 									color="primary"
-									:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
 									hide-details
 									:model-value="formatCurrency(total_of_diff)"
 									readonly
@@ -401,17 +388,23 @@ import {
 	getCustomerStorage,
 	getOfflineCustomers,
 } from "../../../offline/index.js";
-import { silentPrint } from "../../plugins/print.js";
+import { silentPrint, watchPrintWindow } from "../../plugins/print.js";
 import { useRtl } from "../../composables/useRtl.js";
+import { useCustomersStore } from "../../stores/customersStore.js";
+import { storeToRefs } from "pinia";
 
 export default {
 	mixins: [format],
 	setup() {
 		const { isRtl, rtlStyles, rtlClasses } = useRtl();
+		const customersStore = useCustomersStore();
+		const { selectedCustomer, refreshToken } = storeToRefs(customersStore);
 		return {
 			isRtl,
 			rtlStyles,
-			rtlClasses
+			rtlClasses,
+			selectedCustomer,
+			customerRefreshToken: refreshToken,
 		};
 	},
 	data: function () {
@@ -674,13 +667,14 @@ export default {
 			// When offline, attempt to load details from cached customers
 			if (isOffline()) {
 				try {
-					const cached = (getCustomerStorage() || []).find(
+					const list = await getCustomerStorage();
+					const cached = (list || []).find(
 						(c) => c.name === vm.customer_name || c.customer_name === vm.customer_name,
 					);
 					if (cached) {
 						vm.customer_info = { ...cached };
 						vm.set_mpesa_search_params();
-						vm.eventBus.emit("set_customer_info_to_edit", vm.customer_info);
+						useCustomersStore().setCustomerInfo(vm.customer_info);
 						return;
 					}
 					const queued = (getOfflineCustomers() || [])
@@ -689,7 +683,7 @@ export default {
 					if (queued) {
 						vm.customer_info = { ...queued, name: queued.customer_name };
 						vm.set_mpesa_search_params();
-						vm.eventBus.emit("set_customer_info_to_edit", vm.customer_info);
+						useCustomersStore().setCustomerInfo(vm.customer_info);
 					}
 				} catch (error) {
 					console.error("Failed to fetch cached customer", error);
@@ -698,19 +692,19 @@ export default {
 			}
 
 			try {
-                                const r = await frappe.call({
-                                        method: "posawesome.posawesome.api.customers.get_customer_info",
-                                        args: {
-                                                customer: vm.customer_name,
-                                        },
-                                });
+				const r = await frappe.call({
+					method: "posawesome.posawesome.api.customers.get_customer_info",
+					args: {
+						customer: vm.customer_name,
+					},
+				});
 				const message = r.message;
 				if (!r.exc) {
 					vm.customer_info = {
 						...message,
 					};
 					vm.set_mpesa_search_params();
-					vm.eventBus.emit("set_customer_info_to_edit", vm.customer_info);
+					useCustomersStore().setCustomerInfo(vm.customer_info);
 				}
 			} catch (error) {
 				console.error("Failed to fetch customer details", error);
@@ -718,7 +712,7 @@ export default {
 		},
 		onInvoiceSelected(event) {
 			if (event && event.item && event.item.customer) {
-				this.eventBus.emit("set_customer", event.item.customer);
+				useCustomersStore().setSelectedCustomer(event.item.customer);
 				// Force UI to update total calculations
 				this.$nextTick(() => {
 					this.$forceUpdate();
@@ -1075,7 +1069,7 @@ export default {
 				this.selected_invoices.push(item);
 
 				if (item.customer && !this.customer_name) {
-					this.eventBus.emit("set_customer", item.customer);
+					useCustomersStore().setSelectedCustomer(item.customer);
 				}
 			}
 
@@ -1106,12 +1100,14 @@ export default {
 
 			console.log("Opening printing URL:", url);
 
-			if (this.pos_profile?.posa_silent_print) {
-				silentPrint(url);
-			} else {
-				window.open(url, "_blank");
-			}
-		},
+                        const printOptions = {};
+                        if (this.pos_profile?.posa_silent_print) {
+                                silentPrint(url, printOptions);
+                        } else {
+                                const printWindow = window.open(url, "_blank");
+                                watchPrintWindow(printWindow, printOptions);
+                        }
+                },
 
 		async syncPendingPayments() {
 			const pending = getPendingOfflinePaymentCount();
@@ -1193,9 +1189,6 @@ export default {
 
 			return flt(invoiceTotal - paymentTotal);
 		},
-		isDarkTheme() {
-			return this.$theme.current === "dark";
-		},
 	},
 
 	created() {
@@ -1204,25 +1197,44 @@ export default {
 		this.eventBus.on("server-online", this.syncPendingPayments);
 	},
 
-	mounted: function () {
-		this.$nextTick(function () {
-			this.check_opening_entry();
-			this.eventBus.on("update_customer", (customer_name) => {
+	mounted() {
+		this.$watch(
+			() => this.selectedCustomer,
+			(customerName) => {
+				const normalized = customerName || "";
+				if (!normalized) {
+					this.clear_all(true);
+					this.customer_name = "";
+					this.outstanding_invoices = [];
+					this.unallocated_payments = [];
+					this.mpesa_payments = [];
+					return;
+				}
+				if (normalized === this.customer_name) {
+					return;
+				}
 				this.clear_all(true);
-				this.customer_name = customer_name;
+				this.customer_name = normalized;
 				this.fetch_customer_details();
 				this.get_outstanding_invoices();
 				this.get_unallocated_payments();
 				this.get_draft_mpesa_payments_register();
-			});
-			this.eventBus.on("fetch_customer_details", () => {
-				this.fetch_customer_details();
-			});
+			},
+			{ immediate: true },
+		);
+		this.$watch(
+			() => this.customerRefreshToken,
+			() => {
+				if (this.customer_name) {
+					this.fetch_customer_details();
+				}
+			},
+		);
+		this.$nextTick(() => {
+			this.check_opening_entry();
 		});
 	},
 	beforeUnmount() {
-		this.eventBus.off("update_customer");
-		this.eventBus.off("fetch_customer_details");
 		this.eventBus.off("network-online", this.syncPendingPayments);
 		this.eventBus.off("server-online", this.syncPendingPayments);
 	},
@@ -1230,36 +1242,6 @@ export default {
 </script>
 
 <style>
-/* Dark mode input styling */
-:deep([data-theme="dark"]) .dark-field,
-:deep(.v-theme--dark) .dark-field,
-::v-deep([data-theme="dark"]) .dark-field,
-::v-deep(.v-theme--dark) .dark-field {
-	background-color: #1e1e1e !important;
-}
-
-:deep([data-theme="dark"]) .dark-field :deep(.v-field__input),
-:deep(.v-theme--dark) .dark-field :deep(.v-field__input),
-:deep([data-theme="dark"]) .dark-field :deep(input),
-:deep(.v-theme--dark) .dark-field :deep(input),
-:deep([data-theme="dark"]) .dark-field :deep(.v-label),
-:deep(.v-theme--dark) .dark-field :deep(.v-label),
-::v-deep([data-theme="dark"]) .dark-field .v-field__input,
-::v-deep(.v-theme--dark) .dark-field .v-field__input,
-::v-deep([data-theme="dark"]) .dark-field input,
-::v-deep(.v-theme--dark) .dark-field input,
-::v-deep([data-theme="dark"]) .dark-field .v-label,
-::v-deep(.v-theme--dark) .dark-field .v-label {
-	color: #fff !important;
-}
-
-:deep([data-theme="dark"]) .dark-field :deep(.v-field__overlay),
-:deep(.v-theme--dark) .dark-field :deep(.v-field__overlay),
-::v-deep([data-theme="dark"]) .dark-field .v-field__overlay,
-::v-deep(.v-theme--dark) .dark-field .v-field__overlay {
-	background-color: #1e1e1e !important;
-}
-
 input[total_of_diff] {
 	text-align: right;
 }

@@ -16,27 +16,206 @@ import { useDiscounts } from "../../composables/useDiscounts.js";
 import { useItemAddition } from "../../composables/useItemAddition.js";
 import { useStockUtils } from "../../composables/useStockUtils.js";
 
+const ITEM_DETAIL_CACHE_TTL = 5000;
+const STOCK_CACHE_TTL = 5000;
+
 const { setSerialNo, setBatchQty } = useBatchSerial();
 const { updateDiscountAmount, calcPrices, calcItemPrice } = useDiscounts();
 const { removeItem, addItem, getNewItem, clearInvoice } = useItemAddition();
 const { calcUom, calcStockQty } = useStockUtils();
 
 export default {
+	_ensureTaskBucket(rowId) {
+		if (!rowId) {
+			return null;
+		}
+		if (!this._itemTaskCache) {
+			this._itemTaskCache = new Map();
+		}
+		if (!this._itemTaskCache.has(rowId)) {
+			this._itemTaskCache.set(rowId, {});
+		}
+		return this._itemTaskCache.get(rowId);
+	},
+	_getItemTaskPromise(rowId, taskName) {
+		if (!rowId || !this._itemTaskCache) {
+			return null;
+		}
+		const bucket = this._itemTaskCache.get(rowId);
+		return bucket ? bucket[taskName] || null : null;
+	},
+	_setItemTaskPromise(rowId, taskName, promise) {
+		if (!rowId || !promise) {
+			return promise;
+		}
+		const bucket = this._ensureTaskBucket(rowId);
+		const trackedPromise = Promise.resolve(promise).finally(() => {
+			const activeBucket = this._itemTaskCache ? this._itemTaskCache.get(rowId) : null;
+			if (activeBucket) {
+				delete activeBucket[taskName];
+				if (!Object.keys(activeBucket).length) {
+					this._itemTaskCache.delete(rowId);
+				}
+			}
+		});
+		bucket[taskName] = trackedPromise;
+		return trackedPromise;
+	},
+	resetItemTaskCache(rowId, taskName = null) {
+		if (!this._itemTaskCache) {
+			return;
+		}
+		if (!rowId) {
+			this._itemTaskCache = new Map();
+			return;
+		}
+		if (taskName === null) {
+			this._itemTaskCache.delete(rowId);
+			return;
+		}
+		const bucket = this._itemTaskCache.get(rowId);
+		if (!bucket) {
+			return;
+		}
+		delete bucket[taskName];
+		if (!Object.keys(bucket).length) {
+			this._itemTaskCache.delete(rowId);
+		}
+	},
+	queueItemTask(itemOrRowId, taskName, taskFn, options = {}) {
+		const rowId = typeof itemOrRowId === "string" ? itemOrRowId : itemOrRowId?.posa_row_id;
+		const { force = false } = options;
+		const executeTask = () => Promise.resolve().then(() => taskFn());
+
+		if (!rowId) {
+			return executeTask();
+		}
+
+		if (force) {
+			this.resetItemTaskCache(rowId, taskName);
+		} else {
+			const existing = this._getItemTaskPromise(rowId, taskName);
+			if (existing) {
+				return existing;
+			}
+		}
+
+		const promise = executeTask();
+		return this._setItemTaskPromise(rowId, taskName, promise);
+	},
+	hasItemTaskPromise(rowId, taskName) {
+		return !!this._getItemTaskPromise(rowId, taskName);
+	},
+	getItemTaskPromise(rowId, taskName) {
+		return this._getItemTaskPromise(rowId, taskName);
+	},
+	_getItemDetailCacheKey(item) {
+		const code = item?.item_code;
+		const warehouse = item?.warehouse || this.pos_profile?.warehouse;
+		if (!code || !warehouse) {
+			return null;
+		}
+		return `${code}::${warehouse}`;
+	},
+	_getCachedItemDetail(key) {
+		if (!key) {
+			return null;
+		}
+		const cache = this.item_detail_cache || {};
+		const entry = cache[key];
+		if (!entry) {
+			return null;
+		}
+		if (Date.now() - entry.ts > ITEM_DETAIL_CACHE_TTL) {
+			delete cache[key];
+			return null;
+		}
+		return entry.data;
+	},
+	_storeItemDetailCache(key, data) {
+		if (!key || !data) {
+			return;
+		}
+		if (!this.item_detail_cache) {
+			this.item_detail_cache = {};
+		}
+		this.item_detail_cache[key] = {
+			ts: Date.now(),
+			data: JSON.parse(JSON.stringify(data)),
+		};
+	},
+	clearItemDetailCache() {
+		this.item_detail_cache = {};
+	},
+	_getStockCacheKey(item) {
+		const code = item?.item_code;
+		const warehouse = item?.warehouse || this.pos_profile?.warehouse;
+		if (!code || !warehouse) {
+			return null;
+		}
+		return `${code}::${warehouse}`;
+	},
+	_getCachedStockQty(key) {
+		if (!key) {
+			return null;
+		}
+		const cache = this.item_stock_cache || {};
+		const entry = cache[key];
+		if (!entry) {
+			return null;
+		}
+		if (Date.now() - entry.ts > STOCK_CACHE_TTL) {
+			delete cache[key];
+			return null;
+		}
+		return entry.qty;
+	},
+	_storeStockQty(key, qty) {
+		if (!key) {
+			return;
+		}
+		if (!this.item_stock_cache) {
+			this.item_stock_cache = {};
+		}
+		this.item_stock_cache[key] = { ts: Date.now(), qty };
+	},
+	clearItemStockCache() {
+		this.item_stock_cache = {};
+	},
 	remove_item(item) {
 		return removeItem(item, this);
 	},
 
-	async add_item(item) {
+	async add_item(item, options = {}) {
 		const res = await addItem(item, this);
-		const target = this.items.find(
-			(it) =>
-				it.item_code === item.item_code &&
-				it.uom === (item.uom || it.uom) &&
-				(!it.batch_no || it.batch_no === item.batch_no),
-		);
-		if (target && this.fetch_available_qty) {
-			this.fetch_available_qty(target);
+
+		const shouldNotify =
+			options?.notifyOnSuccess === true && !options?.skipNotification && this.eventBus?.emit;
+
+		if (shouldNotify) {
+			const rawQty = typeof item?.qty === "number" ? item.qty : parseFloat(item?.qty);
+			const shouldAnnounce = Number.isFinite(rawQty) ? rawQty > 0 : true;
+
+			if (shouldAnnounce) {
+				const addedQty = Number.isFinite(rawQty) ? Math.abs(rawQty) : 1;
+				const rawPrecision = Number(this.float_precision);
+				const precision = Number.isInteger(rawPrecision) ? Math.min(Math.max(rawPrecision, 0), 6) : 2;
+				const displayQty = Number.isInteger(addedQty)
+					? addedQty
+					: Number(addedQty.toFixed(precision));
+				const itemName = item?.item_name || item?.item_code || __("Item");
+				const detail = __("{0} (Qty: {1})", [itemName, displayQty]);
+
+				this.eventBus.emit("show_message", {
+					title: __("Item {0} added to invoice", [itemName]),
+					summary: __("Items added to invoice"),
+					detail,
+					color: "success",
+					groupId: "invoice-item-added",
+				});
+			}
 		}
+
 		return res;
 	},
 
@@ -113,7 +292,7 @@ export default {
 	async cancel_invoice() {
 		const doc = this.get_invoice_doc();
 		this.invoiceType = this.pos_profile.posa_default_sales_order ? "Order" : "Invoice";
-		this.invoiceTypes = ["Invoice", "Order"];
+		this.invoiceTypes = ["Invoice", "Order", "Quotation"];
 		this.posting_date = frappe.datetime.nowdate();
 		var vm = this;
 		if (doc.name && this.pos_profile.posa_allow_delete) {
@@ -132,6 +311,7 @@ export default {
 			});
 		}
 		this.clear_invoice();
+		this.eventBus.emit("focus_item_search");
 		this.cancel_dialog = false;
 	},
 
@@ -176,8 +356,6 @@ export default {
 		}
 
 		if (this.items.length > 0) {
-			this.update_items_details(this.items);
-			this.posa_offers = data.posa_offers || [];
 			this.items.forEach((item) => {
 				if (!item.posa_row_id) {
 					item.posa_row_id = this.makeid(20);
@@ -189,6 +367,16 @@ export default {
 					item.original_item_name = item.item_name;
 				}
 			});
+
+			const manualSnapshots = this._snapshotManualValuesFromDocItems(this.items);
+
+			await this.update_items_details(this.items);
+
+			if (manualSnapshots.length) {
+				this._restoreManualSnapshots(this.items, manualSnapshots);
+			}
+
+			this.posa_offers = data.posa_offers || [];
 		} else {
 			console.log("Warning: No items in return invoice");
 		}
@@ -238,21 +426,25 @@ export default {
 	},
 
 	// Save and clear the current invoice (draft logic)
-	save_and_clear_invoice() {
+	async save_and_clear_invoice() {
 		let old_invoice = null;
 		const doc = this.get_invoice_doc();
-		if (doc.name) {
-			old_invoice = this.update_invoice(doc);
-		} else {
-			if (doc.items.length) {
-				old_invoice = this.update_invoice(doc);
+
+		try {
+			if (doc.name) {
+				old_invoice = await this.update_invoice(doc);
+			} else if (doc.items.length) {
+				old_invoice = await this.update_invoice(doc);
 			} else {
 				this.eventBus.emit("show_message", {
 					title: `Nothing to save`,
 					color: "error",
 				});
 			}
+		} catch (error) {
+			console.error("Error saving and clearing invoice:", error);
 		}
+
 		if (!old_invoice) {
 			this.eventBus.emit("show_message", {
 				title: `Error saving the current invoice`,
@@ -260,6 +452,7 @@ export default {
 			});
 		} else {
 			this.clear_invoice();
+			this.eventBus.emit("focus_item_search");
 			return old_invoice;
 		}
 	},
@@ -280,7 +473,7 @@ export default {
 			this.discount_amount = 0;
 			this.additional_discount_percentage = 0;
 			this.invoiceType = "Invoice";
-			this.invoiceTypes = ["Invoice", "Order"];
+			this.invoiceTypes = ["Invoice", "Order", "Quotation"];
 		} else {
 			if (data.is_return) {
 				// For return without invoice case, check if there's a return_against
@@ -329,12 +522,16 @@ export default {
 	// Build the invoice document object for backend submission
 	get_invoice_doc() {
 		let doc = {};
-		if (this.invoice_doc.name) {
-			doc = { ...this.invoice_doc };
+		const sourceDoc = this.invoice_doc || {};
+
+		if (sourceDoc.name) {
+			doc = { ...sourceDoc };
 		}
 
 		// Always set these fields first
-		if (this.invoiceType === "Order" && this.pos_profile.posa_create_only_sales_order) {
+		if (this.invoiceType === "Quotation") {
+			doc.doctype = "Quotation";
+		} else if (this.invoiceType === "Order" && this.pos_profile.posa_create_only_sales_order) {
 			doc.doctype = "Sales Order";
 		} else if (this.pos_profile.create_pos_invoice_instead_of_sales_invoice) {
 			doc.doctype = "POS Invoice";
@@ -349,14 +546,13 @@ export default {
 
 		// Currency related fields
 		doc.currency = this.selected_currency || this.pos_profile.currency;
-		doc.conversion_rate =
-			(this.invoice_doc && this.invoice_doc.conversion_rate) || this.conversion_rate || 1;
+		doc.conversion_rate = (sourceDoc && sourceDoc.conversion_rate) || this.conversion_rate || 1;
 
 		// Use actual price list currency if available
 		doc.price_list_currency = this.price_list_currency || doc.currency;
 
 		doc.plc_conversion_rate =
-			(this.invoice_doc && this.invoice_doc.plc_conversion_rate) ||
+			(sourceDoc && sourceDoc.plc_conversion_rate) ||
 			(doc.price_list_currency === doc.currency ? 1 : this.exchange_rate);
 
 		// Other fields
@@ -695,7 +891,7 @@ export default {
 
 				new_item.price_list_rate = flt(item.price_list_rate); // Keep price list rate in USD
 				new_item.base_price_list_rate =
-					item.base_price_list_rate || flt(item.price_list_rate / this.exchange_rate);
+					item.base_price_list_rate ?? flt(item.price_list_rate / this.exchange_rate);
 
 				// Calculate amounts
 				new_item.amount = flt(item.qty) * new_item.rate; // Amount in USD
@@ -710,7 +906,7 @@ export default {
 				new_item.rate = flt(item.rate);
 				new_item.base_rate = item.base_rate || flt(item.rate);
 				new_item.price_list_rate = flt(item.price_list_rate);
-				new_item.base_price_list_rate = item.base_price_list_rate || flt(item.price_list_rate);
+				new_item.base_price_list_rate = item.base_price_list_rate ?? flt(item.price_list_rate);
 				new_item.amount = flt(item.qty) * new_item.rate;
 				new_item.base_amount = new_item.amount;
 				new_item.discount_amount = flt(item.discount_amount);
@@ -829,90 +1025,104 @@ export default {
 	},
 
 	// Update invoice in backend
-	update_invoice(doc) {
-		var vm = this;
+	async update_invoice(doc) {
 		if (isOffline()) {
 			// When offline, simply merge the passed doc with the current invoice_doc
 			// to allow offline invoice creation without server calls
-			vm.invoice_doc = Object.assign({}, vm.invoice_doc || {}, doc);
-			return vm.invoice_doc;
+			this.invoice_doc = Object.assign({}, this.invoice_doc || {}, doc);
+			return this.invoice_doc;
 		}
-		frappe.call({
-			method:
-				doc.doctype === "Sales Order" && this.pos_profile.posa_create_only_sales_order
-					? "posawesome.posawesome.api.sales_orders.update_sales_order"
-					: "posawesome.posawesome.api.invoices.update_invoice",
-			args: {
-				data: doc,
-			},
-			async: false,
-			callback: function (r) {
-				if (r.message) {
-					vm.invoice_doc = r.message;
-					if (r.message.exchange_rate_date) {
-						vm.exchange_rate_date = r.message.exchange_rate_date;
-						const posting_backend = vm.formatDateForBackend(vm.posting_date_display);
-						if (posting_backend !== vm.exchange_rate_date) {
-							vm.eventBus.emit("show_message", {
-								title: __(
-									"Exchange rate date " +
-										vm.exchange_rate_date +
-										" differs from posting date " +
-										posting_backend,
-								),
-								color: "warning",
-							});
-						}
+
+		const method =
+			doc.doctype === "Sales Order" && this.pos_profile.posa_create_only_sales_order
+				? "posawesome.posawesome.api.sales_orders.update_sales_order"
+				: doc.doctype === "Quotation"
+					? "posawesome.posawesome.api.quotations.update_quotation"
+					: "posawesome.posawesome.api.invoices.update_invoice";
+
+		try {
+			const response = await frappe.call({
+				method,
+				args: {
+					data: doc,
+				},
+			});
+
+			const message = response?.message;
+			if (message) {
+				this.invoice_doc = message;
+				if (message.exchange_rate_date) {
+					this.exchange_rate_date = message.exchange_rate_date;
+					const posting_backend = this.formatDateForBackend(this.posting_date_display);
+					if (posting_backend !== this.exchange_rate_date) {
+						this.eventBus.emit("show_message", {
+							title: __(
+								"Exchange rate date " +
+									this.exchange_rate_date +
+									" differs from posting date " +
+									posting_backend,
+							),
+							color: "warning",
+						});
 					}
 				}
-			},
-		});
-		return this.invoice_doc;
+			}
+
+			return this.invoice_doc;
+		} catch (error) {
+			console.error("Error updating invoice:", error);
+			throw error;
+		}
 	},
 
 	// Update invoice from order in backend
-	update_invoice_from_order(doc) {
-		var vm = this;
+	async update_invoice_from_order(doc) {
 		if (isOffline()) {
 			// Offline mode - merge doc locally without server update
-			vm.invoice_doc = Object.assign({}, vm.invoice_doc || {}, doc);
-			return vm.invoice_doc;
+			this.invoice_doc = Object.assign({}, this.invoice_doc || {}, doc);
+			return this.invoice_doc;
 		}
-		frappe.call({
-			method: "posawesome.posawesome.api.invoices.update_invoice_from_order",
-			args: {
-				data: doc,
-			},
-			async: false,
-			callback: function (r) {
-				if (r.message) {
-					vm.invoice_doc = r.message;
-					if (r.message.exchange_rate_date) {
-						vm.exchange_rate_date = r.message.exchange_rate_date;
-						const posting_backend = vm.formatDateForBackend(vm.posting_date_display);
-						if (posting_backend !== vm.exchange_rate_date) {
-							vm.eventBus.emit("show_message", {
-								title: __(
-									"Exchange rate date " +
-										vm.exchange_rate_date +
-										" differs from posting date " +
-										posting_backend,
-								),
-								color: "warning",
-							});
-						}
+
+		try {
+			const response = await frappe.call({
+				method: "posawesome.posawesome.api.invoices.update_invoice_from_order",
+				args: {
+					data: doc,
+				},
+			});
+
+			const message = response?.message;
+			if (message) {
+				this.invoice_doc = message;
+				if (message.exchange_rate_date) {
+					this.exchange_rate_date = message.exchange_rate_date;
+					const posting_backend = this.formatDateForBackend(this.posting_date_display);
+					if (posting_backend !== this.exchange_rate_date) {
+						this.eventBus.emit("show_message", {
+							title: __(
+								"Exchange rate date " +
+									this.exchange_rate_date +
+									" differs from posting date " +
+									posting_backend,
+							),
+							color: "warning",
+						});
 					}
 				}
-			},
-		});
-		return this.invoice_doc;
+			}
+
+			return this.invoice_doc;
+		} catch (error) {
+			console.error("Error updating invoice from order:", error);
+			throw error;
+		}
 	},
 
 	// Process and save invoice (handles update or create)
-	process_invoice() {
+	async process_invoice() {
 		const doc = this.get_invoice_doc();
 		try {
-			const updated_doc = this.update_invoice(doc);
+			const updated_doc = await this.update_invoice(doc);
 			if (updated_doc && updated_doc.posting_date) {
 				this.posting_date = this.formatDateForBackend(updated_doc.posting_date);
 			}
@@ -930,17 +1140,365 @@ export default {
 	// Process and save invoice from order
 	async process_invoice_from_order() {
 		const doc = await this.get_invoice_from_order_doc();
-		var up_invoice;
-		if (doc.name) {
-			up_invoice = await this.update_invoice_from_order(doc);
-			return up_invoice;
-		} else {
-			return this.update_invoice_from_order(doc);
+		return this.update_invoice_from_order(doc);
+	},
+
+	// Apply available offers, save the invoice, and reload it from backend
+	async apply_offers_and_reload() {
+		try {
+			if (!Array.isArray(this.items) || this.items.length === 0) {
+				this.eventBus.emit("show_message", {
+					title: __("Select items to apply offers"),
+					color: "warning",
+				});
+				return;
+			}
+
+			// Recompute and apply offers for current items
+			if (typeof this.handelOffers === "function") {
+				await this.handelOffers();
+			}
+
+			// Persist invoice (server calculates totals/taxes)
+			const updated = await this.process_invoice();
+			if (!updated) {
+				return;
+			}
+
+			// Reload same invoice from backend without selection UI
+			if (!isOffline() && updated.name) {
+				await this.reload_current_invoice_from_backend();
+			}
+
+			this.eventBus.emit("show_message", {
+				title: __("Offers applied and invoice refreshed"),
+				color: "success",
+			});
+		} catch (error) {
+			console.error("Error in apply_offers_and_reload:", error);
+			this.eventBus.emit("show_message", {
+				title: __("Failed to apply offers"),
+				color: "error",
+			});
 		}
+	},
+
+	// Reload the currently open invoice from the backend and load it into the UI
+	async reload_current_invoice_from_backend() {
+		try {
+			if (isOffline()) {
+				return null;
+			}
+
+			const current = this.invoice_doc || {};
+			const name = current.name;
+			const doctype =
+				current.doctype ||
+				(this.pos_profile?.create_pos_invoice_instead_of_sales_invoice
+					? "POS Invoice"
+					: "Sales Invoice");
+
+			if (!name || !doctype) {
+				return null;
+			}
+
+			const manualOverrides = this._collectManualRateOverrides(this.items);
+
+			const r = await frappe.call({
+				method: "frappe.client.get",
+				args: { doctype, name },
+			});
+
+			const doc = r?.message;
+			if (doc) {
+				if (manualOverrides.length) {
+					this._applyManualRateOverridesToDoc(doc, manualOverrides);
+				}
+				await this.load_invoice(doc);
+				return doc;
+			}
+			return null;
+		} catch (error) {
+			console.error("Error reloading current invoice from backend:", error);
+			this.eventBus.emit("show_message", {
+				title: __("Failed to reload invoice from server"),
+				color: "warning",
+			});
+			return null;
+		}
+	},
+
+	_collectManualRateOverrides(items) {
+		if (!Array.isArray(items) || !items.length) {
+			return [];
+		}
+
+		return items
+			.filter((item) => item && item._manual_rate_set)
+			.map((item) => ({
+				keys: {
+					name: item.name || null,
+					posa_row_id: item.posa_row_id || null,
+					item_code: item.item_code || null,
+					idx: item.idx !== undefined && item.idx !== null ? Number(item.idx) : null,
+					batch_no: item.batch_no || null,
+					serial_no: item.serial_no || null,
+				},
+				values: {
+					rate: item.rate,
+					base_rate: item.base_rate,
+					price_list_rate: item.price_list_rate,
+					base_price_list_rate: item.base_price_list_rate,
+					discount_amount: item.discount_amount,
+					base_discount_amount: item.base_discount_amount,
+					discount_percentage: item.discount_percentage,
+					amount: item.amount,
+					base_amount: item.base_amount,
+					conversion_factor: item.conversion_factor,
+					uom: item.uom,
+				},
+			}));
+	},
+
+	_doesManualOverrideMatchItem(override, item) {
+		if (!override?.keys || !item) {
+			return false;
+		}
+
+		const { name, posa_row_id, item_code, idx, batch_no, serial_no } = override.keys;
+
+		if (name && item.name && name === item.name) {
+			return true;
+		}
+
+		if (posa_row_id && item.posa_row_id && posa_row_id === item.posa_row_id) {
+			return true;
+		}
+
+		if (item_code && item.item_code === item_code) {
+			if (idx !== null && idx !== undefined) {
+				const itemIdx = item.idx !== undefined && item.idx !== null ? Number(item.idx) : null;
+				if (itemIdx !== null && itemIdx === idx) {
+					return true;
+				}
+			}
+
+			const batchMatch = (batch_no || null) === (item.batch_no || null);
+			const serialMatch = (serial_no || null) === (item.serial_no || null);
+
+			if (batchMatch && serialMatch) {
+				return true;
+			}
+		}
+
+		return false;
+	},
+
+	_assignManualOverrideValues(item, values = {}) {
+		if (!item || !values) {
+			return;
+		}
+
+		item._manual_rate_set = true;
+
+		if (values.uom) {
+			item.uom = values.uom;
+		}
+		if (values.conversion_factor !== undefined && values.conversion_factor !== null) {
+			item.conversion_factor = values.conversion_factor;
+		}
+
+		if (values.price_list_rate !== undefined) {
+			item.price_list_rate = values.price_list_rate;
+		}
+		if (values.base_price_list_rate !== undefined) {
+			item.base_price_list_rate = values.base_price_list_rate;
+		}
+		if (values.rate !== undefined) {
+			item.rate = values.rate;
+		}
+		if (values.base_rate !== undefined) {
+			item.base_rate = values.base_rate;
+		}
+		if (values.discount_amount !== undefined) {
+			item.discount_amount = values.discount_amount;
+		}
+		if (values.base_discount_amount !== undefined) {
+			item.base_discount_amount = values.base_discount_amount;
+		}
+		if (values.discount_percentage !== undefined) {
+			item.discount_percentage = values.discount_percentage;
+		}
+
+		if (values.amount !== undefined) {
+			item.amount = values.amount;
+		} else if (typeof item.qty === "number" && typeof item.rate === "number") {
+			item.amount = this.flt(item.qty * item.rate, this.currency_precision);
+		}
+
+		if (values.base_amount !== undefined) {
+			item.base_amount = values.base_amount;
+		} else if (typeof item.qty === "number" && typeof item.base_rate === "number") {
+			item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
+		}
+	},
+
+	_applyManualRateOverridesToDoc(doc, overrides) {
+		if (!doc || !Array.isArray(doc.items) || !Array.isArray(overrides) || !overrides.length) {
+			return;
+		}
+
+		const remaining = [...overrides];
+
+		doc.items.forEach((item) => {
+			if (!item || !remaining.length) {
+				return;
+			}
+
+			const index = remaining.findIndex((entry) => this._doesManualOverrideMatchItem(entry, item));
+			if (index === -1) {
+				return;
+			}
+
+			const override = remaining.splice(index, 1)[0];
+			this._assignManualOverrideValues(item, override.values);
+		});
+	},
+
+	_buildManualOverrideKeyFromItem(item) {
+		if (!item) {
+			return null;
+		}
+
+		const idx =
+			item.idx !== undefined && item.idx !== null && !Number.isNaN(Number(item.idx))
+				? Number(item.idx)
+				: null;
+
+		if (!item.name && !item.posa_row_id && !item.item_code) {
+			return null;
+		}
+
+		return {
+			name: item.name || null,
+			posa_row_id: item.posa_row_id || null,
+			item_code: item.item_code || null,
+			idx,
+			batch_no: item.batch_no || null,
+			serial_no: item.serial_no || null,
+		};
+	},
+
+	_snapshotManualValuesFromDocItems(items) {
+		if (!Array.isArray(items) || !items.length) {
+			return [];
+		}
+
+		const EPSILON = 0.000001;
+
+		return items
+			.map((item) => {
+				const keys = this._buildManualOverrideKeyFromItem(item);
+				if (!keys) {
+					return null;
+				}
+
+				const rate = Number(item?.rate ?? 0);
+				const priceListRate = Number(item?.price_list_rate ?? rate);
+				const baseRate = Number(item?.base_rate ?? 0);
+				const basePriceListRate = Number(item?.base_price_list_rate ?? baseRate);
+				const discountAmount = Number(item?.discount_amount ?? 0);
+				const baseDiscountAmount = Number(item?.base_discount_amount ?? 0);
+				const discountPercentage = Number(item?.discount_percentage ?? 0);
+
+				const preserveRate =
+					item?._manual_rate_set === true ||
+					Math.abs(rate - priceListRate) > EPSILON ||
+					Math.abs(baseRate - basePriceListRate) > EPSILON ||
+					Math.abs(discountAmount) > EPSILON ||
+					Math.abs(baseDiscountAmount) > EPSILON ||
+					Math.abs(discountPercentage) > EPSILON;
+
+				const preserveUom = Boolean(item?.uom);
+
+				return {
+					keys,
+					preserveRate,
+					preserveUom,
+					values: {
+						rate: item.rate,
+						base_rate: item.base_rate,
+						price_list_rate: item.price_list_rate,
+						base_price_list_rate: item.base_price_list_rate,
+						discount_amount: item.discount_amount,
+						base_discount_amount: item.base_discount_amount,
+						discount_percentage: item.discount_percentage,
+						amount: item.amount,
+						base_amount: item.base_amount,
+						conversion_factor: item.conversion_factor,
+						uom: item.uom,
+					},
+				};
+			})
+			.filter((entry) => entry !== null);
+	},
+
+	_restoreManualSnapshots(items, snapshots) {
+		if (!Array.isArray(items) || !Array.isArray(snapshots) || !snapshots.length) {
+			return;
+		}
+
+		const remaining = [...snapshots];
+
+		items.forEach((item) => {
+			if (!item || !remaining.length) {
+				return;
+			}
+
+			const index = remaining.findIndex((snapshot) =>
+				this._doesManualOverrideMatchItem({ keys: snapshot.keys }, item),
+			);
+
+			if (index === -1) {
+				return;
+			}
+
+			const snapshot = remaining.splice(index, 1)[0];
+			const values = snapshot.values || {};
+
+			if (snapshot.preserveRate) {
+				this._assignManualOverrideValues(item, values);
+			} else if (snapshot.preserveUom) {
+				if (values.uom !== undefined) {
+					item.uom = values.uom;
+				}
+				if (values.conversion_factor !== undefined && values.conversion_factor !== null) {
+					item.conversion_factor = values.conversion_factor;
+				}
+
+				if (values.amount !== undefined) {
+					item.amount = values.amount;
+				} else if (typeof item.qty === "number" && typeof item.rate === "number") {
+					item.amount = this.flt(item.qty * item.rate, this.currency_precision);
+				}
+
+				if (values.base_amount !== undefined) {
+					item.base_amount = values.base_amount;
+				} else if (typeof item.qty === "number" && typeof item.base_rate === "number") {
+					item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
+				}
+			}
+		});
 	},
 
 	// Show payment dialog after validation and processing
 	async show_payment() {
+		if (this._suppressClosePaymentsTimer) {
+			clearTimeout(this._suppressClosePaymentsTimer);
+			this._suppressClosePaymentsTimer = null;
+		}
+		this._suppressClosePayments = true;
+
 		try {
 			console.log("Starting show_payment process");
 			console.log("Invoice state before payment:", {
@@ -982,21 +1540,37 @@ export default {
 				this.invoiceType === "Order" &&
 				this.pos_profile.posa_create_only_sales_order &&
 				!this.new_delivery_date &&
-				!this.invoice_doc.posa_delivery_date
+				!(this.invoice_doc && this.invoice_doc.posa_delivery_date)
 			) {
 				console.log("Building local Sales Order doc for payment");
 				invoice_doc = this.get_invoice_doc();
-			} else if (this.invoice_doc.doctype == "Sales Order" && this.invoiceType === "Invoice") {
+			} else if (
+				this.invoice_doc &&
+				this.invoice_doc.doctype === "Sales Order" &&
+				this.invoiceType === "Invoice"
+			) {
 				console.log("Processing Sales Order payment");
 				invoice_doc = await this.process_invoice_from_order();
 			} else {
 				console.log("Processing regular invoice");
-				invoice_doc = this.process_invoice();
+				invoice_doc = await this.process_invoice();
 			}
 
 			if (!invoice_doc) {
 				console.log("Failed to process invoice");
 				return;
+			}
+
+			// Reload current invoice from backend (no selection dialog) to ensure items/totals are up-to-date
+			if (!isOffline() && invoice_doc.name) {
+				console.log("Reloading current invoice from backend");
+				const refreshed = await this.reload_current_invoice_from_backend();
+				if (refreshed) {
+					invoice_doc = refreshed;
+					console.log("Refreshed invoice:", invoice_doc);
+				} else {
+					console.log("Failed to refresh invoice");
+				}
 			}
 
 			// Update invoice_doc with current currency info
@@ -1076,6 +1650,9 @@ export default {
 			}
 
 			console.log("Showing payment dialog with currency:", invoice_doc.currency);
+			if (typeof this.paymentVisible !== "undefined") {
+				this.paymentVisible = true;
+			}
 			this.eventBus.emit("show_payment", "true");
 			this.eventBus.emit("send_invoice_doc_payment", invoice_doc);
 		} catch (error) {
@@ -1085,6 +1662,11 @@ export default {
 				color: "error",
 				message: error.message,
 			});
+		} finally {
+			this._suppressClosePaymentsTimer = setTimeout(() => {
+				this._suppressClosePayments = false;
+				this._suppressClosePaymentsTimer = null;
+			}, 300);
 		}
 	},
 
@@ -1129,7 +1711,8 @@ export default {
 		}
 
 		// For return with reference to existing invoice
-		if (this.invoice_doc.is_return && this.invoice_doc.return_against) {
+		const currentInvoice = this.invoice_doc;
+		if (currentInvoice && currentInvoice.is_return && currentInvoice.return_against) {
 			console.log("Return doc:", this.invoice_doc);
 			console.log("Current items:", this.items);
 
@@ -1142,7 +1725,7 @@ export default {
 							doctype: this.pos_profile.create_pos_invoice_instead_of_sales_invoice
 								? "POS Invoice"
 								: "Sales Invoice",
-							name: this.invoice_doc.return_against,
+							name: currentInvoice.return_against,
 						},
 						callback: (r) => {
 							if (r.message) {
@@ -1241,41 +1824,49 @@ export default {
 	},
 
 	// Get draft invoices from backend
-	get_draft_invoices() {
-		var vm = this;
-		frappe.call({
-			method: "posawesome.posawesome.api.invoices.get_draft_invoices",
-			args: {
-				pos_opening_shift: this.pos_opening_shift.name,
-				doctype: this.pos_profile.create_pos_invoice_instead_of_sales_invoice
-					? "POS Invoice"
-					: "Sales Invoice",
-			},
-			async: false,
-			callback: function (r) {
-				if (r.message) {
-					vm.eventBus.emit("open_drafts", r.message);
-				}
-			},
-		});
+	async get_draft_invoices() {
+		try {
+			const { message } = await frappe.call({
+				method: "posawesome.posawesome.api.invoices.get_draft_invoices",
+				args: {
+					pos_opening_shift: this.pos_opening_shift.name,
+					doctype: this.pos_profile.create_pos_invoice_instead_of_sales_invoice
+						? "POS Invoice"
+						: "Sales Invoice",
+				},
+			});
+			if (message) {
+				this.eventBus.emit("open_drafts", message);
+			}
+		} catch (error) {
+			console.error("Error fetching draft invoices:", error);
+			this.eventBus.emit("show_message", {
+				title: __("Unable to fetch draft invoices"),
+				color: "error",
+			});
+		}
 	},
 
 	// Get draft orders from backend
-	get_draft_orders() {
-		var vm = this;
-		frappe.call({
-			method: "posawesome.posawesome.api.sales_orders.search_orders",
-			args: {
-				company: this.pos_profile.company,
-				currency: this.pos_profile.currency,
-			},
-			async: false,
-			callback: function (r) {
-				if (r.message) {
-					vm.eventBus.emit("open_orders", r.message);
-				}
-			},
-		});
+	async get_draft_orders() {
+		try {
+			const { message } = await frappe.call({
+				method: "posawesome.posawesome.api.sales_orders.search_orders",
+				args: {
+					company: this.pos_profile.company,
+					currency: this.pos_profile.currency,
+				},
+			});
+			if (message) {
+				this.eventBus.emit("open_orders", message);
+			}
+		} catch (error) {
+			console.error("Error fetching draft orders:", error);
+			this.eventBus.emit("show_message", {
+				title: __("Unable to fetch draft orders"),
+				color: "error",
+			});
+		}
 	},
 
 	// Open returns dialog
@@ -1285,6 +1876,18 @@ export default {
 
 	// Close payment dialog
 	close_payments() {
+		if (this._suppressClosePayments) {
+			return;
+		}
+
+		if (typeof this.paymentVisible !== "undefined" && !this.paymentVisible) {
+			return;
+		}
+
+		if (typeof this.paymentVisible !== "undefined") {
+			this.paymentVisible = false;
+		}
+
 		this.eventBus.emit("show_payment", "false");
 	},
 
@@ -1315,18 +1918,23 @@ export default {
 						item.has_serial_no = updated_item.has_serial_no;
 						item.batch_no_data = updated_item.batch_no_data;
 						item.serial_no_data = updated_item.serial_no_data;
-                                               if (updated_item.rate !== undefined) {
-                                                       if (!item.locked_price && !item.posa_offer_applied) {
-                                                               if (updated_item.rate !== 0 || !item.rate) {
-                                                                       item.rate = updated_item.rate;
-                                                                       item.price_list_rate =
-                                                                               updated_item.price_list_rate || updated_item.rate;
-                                                               }
-                                                       } else if (!item.price_list_rate) {
-                                                               item.price_list_rate =
-                                                                       updated_item.price_list_rate || updated_item.rate;
-                                                       }
-                                               }
+						if (updated_item.rate !== undefined) {
+							const force =
+								this.pos_profile?.posa_force_price_from_customer_price_list !== false;
+							const price = updated_item.price_list_rate ?? updated_item.rate ?? 0;
+							const manualLocked = item._manual_rate_set === true;
+							const shouldOverrideRate =
+								!item.locked_price && !item.posa_offer_applied && !manualLocked;
+
+							if (shouldOverrideRate) {
+								if (force || price) {
+									item.rate = price;
+									item.price_list_rate = price;
+								}
+							} else if (!item.price_list_rate && (force || price)) {
+								item.price_list_rate = price;
+							}
+						}
 						if (updated_item.currency) {
 							item.currency = updated_item.currency;
 						}
@@ -1343,260 +1951,342 @@ export default {
 	},
 
 	// Update details for a single item (fetch from backend)
-	update_item_detail(item, force_update = false) {
+	async update_item_detail(item, force_update = false) {
+		return this.queueItemTask(
+			item,
+			"update_item_detail",
+			() => this._performItemDetailUpdate(item, force_update),
+			{ force: force_update },
+		);
+	},
+
+	async _performItemDetailUpdate(item, force_update = false) {
 		console.log("update_item_detail request", {
-			code: item.item_code,
+			code: item ? item.item_code : undefined,
 			force_update,
 		});
-		if (!item.item_code) {
+		if (!item || !item.item_code) {
 			return;
 		}
-		var vm = this;
 
-		// If a manual rate was set (e.g. via explicit UOM pricing), don't
-		// overwrite it on expand unless explicitly forced.
 		if (item._manual_rate_set && !force_update) {
 			return;
 		}
 
-		// Remove this block which was causing the issue - rates should persist regardless of currency
-		// if (item.price_list_rate && !item.posa_offer_applied) {
-		//   item.rate = item.price_list_rate;
-		//   this.$forceUpdate();
-		// }
+		if (force_update) {
+			item._detailSynced = false;
+		}
 
-		const currentDoc = this.get_invoice_doc();
-		frappe.call({
-			method: "posawesome.posawesome.api.items.get_item_detail",
-			args: {
-				warehouse: item.warehouse || this.pos_profile.warehouse,
-				doc: currentDoc,
-				price_list: this.selected_price_list || this.pos_profile.selling_price_list,
-				item: {
-					item_code: item.item_code,
-					customer: this.customer,
-					doctype: currentDoc.doctype,
-					name: currentDoc.name || `New ${currentDoc.doctype} 1`,
-					company: this.pos_profile.company,
-					conversion_rate: 1,
-					currency: this.pos_profile.currency,
-					qty: item.qty,
-					price_list_rate: item.base_price_list_rate || item.price_list_rate,
-					child_docname: `New ${currentDoc.doctype} Item 1`,
-					cost_center: this.pos_profile.cost_center,
-					pos_profile: this.pos_profile.name,
-					uom: item.uom,
-					tax_category: "",
-					transaction_type: "selling",
-					update_stock: this.pos_profile.update_stock,
-					price_list: this.get_price_list(),
-					has_batch_no: item.has_batch_no,
-					has_serial_no: item.has_serial_no,
-					serial_no: item.serial_no,
-					batch_no: item.batch_no,
-					is_stock_item: item.is_stock_item,
+		if (!force_update && item._detailSynced) {
+			return;
+		}
+
+		const cacheKey = this._getItemDetailCacheKey(item);
+		if (!force_update) {
+			const cachedPayload = this._getCachedItemDetail(cacheKey);
+			if (cachedPayload) {
+				this._applyItemDetailPayload(item, cachedPayload, {
+					forceUpdate: force_update,
+					fromCache: true,
+				});
+				item._detailSynced = true;
+				return;
+			}
+		}
+
+		if (item._detailInFlight) {
+			return;
+		}
+
+		item._detailInFlight = true;
+
+		try {
+			const currentDoc = this.get_invoice_doc();
+			const response = await frappe.call({
+				method: "posawesome.posawesome.api.items.get_item_detail",
+				args: {
+					warehouse: item.warehouse || this.pos_profile.warehouse,
+					doc: currentDoc,
+					price_list: this.selected_price_list || this.pos_profile.selling_price_list,
+					item: {
+						item_code: item.item_code,
+						customer: this.customer,
+						doctype: currentDoc.doctype,
+						name: currentDoc.name || `New ${currentDoc.doctype} 1`,
+						company: this.pos_profile.company,
+						conversion_rate: 1,
+						currency: this.pos_profile.currency,
+						qty: item.qty,
+						price_list_rate: item.base_price_list_rate ?? item.price_list_rate ?? 0,
+						child_docname: `New ${currentDoc.doctype} Item 1`,
+						cost_center: this.pos_profile.cost_center,
+						pos_profile: this.pos_profile.name,
+						uom: item.uom,
+						tax_category: "",
+						transaction_type: "selling",
+						update_stock: this.pos_profile.update_stock,
+						price_list: this.get_price_list(),
+						has_batch_no: item.has_batch_no,
+						has_serial_no: item.has_serial_no,
+						serial_no: item.serial_no,
+						batch_no: item.batch_no,
+						is_stock_item: item.is_stock_item,
+					},
 				},
-			},
-			callback: function (r) {
-				if (r.message) {
-					const data = r.message;
-					if (!item.warehouse) {
-						item.warehouse = vm.pos_profile.warehouse;
-					}
-					// Ensure price list currency is synced from server response
-					if (data.price_list_currency) {
-						vm.price_list_currency = data.price_list_currency;
-					}
+			});
 
-					if (!item.original_currency) {
-						item.original_currency =
-							data.price_list_currency || vm.price_list_currency || vm.selected_currency;
-					}
-					if (!item.original_rate) {
-						item.original_rate = data.price_list_rate;
-					}
-					if (data.serial_no_data) {
-						item.serial_no_data = data.serial_no_data;
-					}
-					if (data.batch_no_data) {
-						item.batch_no_data = data.batch_no_data;
-					}
-					if (
-						item.has_batch_no &&
-						vm.pos_profile.posa_auto_set_batch &&
-						!item.batch_no &&
-						data.batch_no_data &&
-						data.batch_no_data.length > 0
-					) {
-						item.batch_no_data = data.batch_no_data;
-						// Pass null instead of undefined to avoid console warning
-						vm.set_batch_qty(item, null, false);
-					}
+			const data = response?.message;
+			if (!data) {
+				return;
+			}
 
-					if (!item.locked_price) {
-						// First save base rates if not exists or when force update is requested
-						// Avoid overriding existing base rates when the selected currency
-						// matches the POS Profile currency. This prevents manual or offer
-						// adjusted rates from being reset whenever an item row is expanded.
-						if (force_update || !item.base_rate) {
-							// Always store base rates from server in base currency
-							if (data.price_list_rate !== 0 || !item.base_price_list_rate) {
-								item.base_price_list_rate = data.price_list_rate;
-								if (!item.posa_offer_applied) {
-									item.base_rate = data.price_list_rate;
-								}
-							}
-						}
-
-						// Only update rates if no offer is applied
-						if (!item.posa_offer_applied) {
-							const companyCurrency = vm.pos_profile.currency;
-							const baseCurrency = companyCurrency;
-
-							if (
-								vm.selected_currency === vm.price_list_currency &&
-								vm.selected_currency !== companyCurrency
-							) {
-								const conv = vm.conversion_rate || 1;
-								item.price_list_rate = vm.flt(
-									item.base_price_list_rate / conv,
-									vm.currency_precision,
-								);
-
-								if (!item._manual_rate_set) {
-									item.rate = vm.flt(item.base_rate / conv, vm.currency_precision);
-								}
-							} else if (vm.selected_currency !== baseCurrency) {
-								const exchange_rate = vm.exchange_rate || 1;
-								item.price_list_rate = vm.flt(
-									item.base_price_list_rate * exchange_rate,
-									vm.currency_precision,
-								);
-
-								item.rate = vm.flt(item.base_rate * exchange_rate, vm.currency_precision);
-							} else {
-								item.price_list_rate = item.base_price_list_rate;
-
-								if (!item._manual_rate_set) {
-									item.rate = item.base_rate;
-								}
-							}
-                                               } else {
-                                                       // Preserve discounted price when an offer is applied so the
-                                                       // rate doesn't revert to the original price list value.
-                                                       const baseCurrency = vm.price_list_currency || vm.pos_profile.currency;
-                                                       if (vm.selected_currency !== baseCurrency) {
-                                                               item.price_list_rate = vm.flt(
-                                                                       item.base_rate * vm.exchange_rate,
-                                                                       vm.currency_precision,
-                                                               );
-                                                       } else {
-                                                               item.price_list_rate = item.base_rate;
-                                                       }
-                                               }
-
-						// Handle customer discount only if no offer is applied
-						if (
-							!item.posa_offer_applied &&
-							vm.pos_profile.posa_apply_customer_discount &&
-							vm.customer_info.posa_discount > 0 &&
-							vm.customer_info.posa_discount <= 100 &&
-							item.posa_is_offer == 0 &&
-							!item.posa_is_replace
-						) {
-							const discount_percent =
-								item.max_discount > 0
-									? Math.min(item.max_discount, vm.customer_info.posa_discount)
-									: vm.customer_info.posa_discount;
-
-							item.discount_percentage = discount_percent;
-
-							// Calculate discount in selected currency
-							const discount_amount = vm.flt(
-								(item.price_list_rate * discount_percent) / 100,
-								vm.currency_precision,
-							);
-							item.discount_amount = discount_amount;
-
-							// Also store base discount amount
-							item.base_discount_amount = vm.flt(
-								(item.base_price_list_rate * discount_percent) / 100,
-								vm.currency_precision,
-							);
-
-							// Update rates with discount
-							item.rate = vm.flt(item.price_list_rate - discount_amount, vm.currency_precision);
-							item.base_rate = vm.flt(
-								item.base_price_list_rate - item.base_discount_amount,
-								vm.currency_precision,
-							);
-						}
-					}
-
-					// Update other item details
-					item.last_purchase_rate = data.last_purchase_rate;
-					item.projected_qty = data.projected_qty;
-					item.reserved_qty = data.reserved_qty;
-					item.conversion_factor = data.conversion_factor;
-					item.stock_qty = data.stock_qty;
-					item.actual_qty = data.actual_qty;
-					item.stock_uom = data.stock_uom;
-					item.has_serial_no = data.has_serial_no;
-					item.has_batch_no = data.has_batch_no;
-
-					// Calculate final amount
-					item.amount = vm.flt(item.qty * item.rate, vm.currency_precision);
-					item.base_amount = vm.flt(item.qty * item.base_rate, vm.currency_precision);
-
-					// Log updated rates for debugging
-					console.log(`Updated rates for ${item.item_code} on expand:`, {
-						base_rate: item.base_rate,
-						rate: item.rate,
-						base_price_list_rate: item.base_price_list_rate,
-						price_list_rate: item.price_list_rate,
-						exchange_rate: vm.exchange_rate,
-						selected_currency: vm.selected_currency,
-						default_currency: vm.pos_profile.currency,
-					});
-
-					// Force update UI immediately
-					vm.$forceUpdate();
-				}
-			},
-		});
+			this._applyItemDetailPayload(item, data, { forceUpdate: force_update, fromCache: false });
+			this._storeItemDetailCache(cacheKey, data);
+			item._detailSynced = true;
+			if (typeof this.$forceUpdate === "function") {
+				this.$forceUpdate();
+			}
+		} catch (error) {
+			console.error("Error updating item detail:", error);
+			this.eventBus.emit("show_message", {
+				title: __("Error updating item details"),
+				color: "error",
+			});
+		} finally {
+			item._detailInFlight = false;
+		}
 	},
 
+	_applyItemDetailPayload(item, data, options = {}) {
+		const { forceUpdate = false } = options;
+
+		if (!item.warehouse) {
+			item.warehouse = this.pos_profile.warehouse;
+		}
+		if (data.price_list_currency) {
+			this.price_list_currency = data.price_list_currency;
+		}
+
+		if (data.uom) {
+			item.stock_uom = data.stock_uom;
+			item.uom = data.uom;
+		}
+		if (data.conversion_factor) {
+			item.conversion_factor = data.conversion_factor;
+		}
+
+		item.item_uoms = data.item_uoms || [];
+
+		if (Array.isArray(item.item_uoms) && item.item_uoms.length) {
+			const existingIndex = item.item_uoms.findIndex((uom) => uom.uom === item.uom);
+			if (existingIndex === -1) {
+				item.item_uoms.push({
+					uom: item.uom,
+					conversion_factor: item.conversion_factor || 1,
+				});
+			}
+		}
+
+		if (data.uom) {
+			item.uom = data.uom;
+		}
+
+		item.allow_change_warehouse = data.allow_change_warehouse;
+		item.locked_price = data.locked_price;
+		item.description = data.description;
+		item.item_tax_template = data.item_tax_template;
+		item.discount_percentage = data.discount_percentage;
+		item.warehouse = data.warehouse || item.warehouse;
+		item.has_batch_no = data.has_batch_no;
+		item.has_serial_no = data.has_serial_no;
+		item.serial_no = data.serial_no;
+		item.batch_no = data.batch_no;
+		item.is_stock_item = data.is_stock_item;
+		item.is_fixed_asset = data.is_fixed_asset;
+		item.allow_alternative_item = data.allow_alternative_item;
+		item.is_stock_item = data.is_stock_item;
+		item.warehouse = data.warehouse || item.warehouse;
+
+		item.actual_qty = data.actual_qty;
+		item.available_qty = data.actual_qty;
+
+		if (this.update_qty_limits) {
+			this.update_qty_limits(item);
+		}
+
+		if (data.barcode) {
+			item.barcode = data.barcode;
+		}
+		if (data.brand) {
+			item.brand = data.brand;
+		}
+		if (data.batch_no) {
+			item.batch_no = data.batch_no;
+		}
+		if (data.serial_no_data) {
+			item.serial_no_data = data.serial_no_data;
+		}
+		if (data.batch_no_data) {
+			item.batch_no_data = data.batch_no_data;
+		}
+		if (
+			item.has_batch_no &&
+			this.pos_profile.posa_auto_set_batch &&
+			!item.batch_no &&
+			Array.isArray(data.batch_no_data) &&
+			data.batch_no_data.length > 0
+		) {
+			item.batch_no_data = data.batch_no_data;
+			this.set_batch_qty(item, null, false);
+		}
+
+		if (!item.locked_price) {
+			if (forceUpdate || !item.base_rate) {
+				if (data.price_list_rate !== 0 || !item.base_price_list_rate) {
+					item.base_price_list_rate = data.price_list_rate;
+					if (!item.posa_offer_applied) {
+						item.base_rate = data.price_list_rate;
+					}
+				}
+			}
+
+			if (!item.posa_offer_applied) {
+				const companyCurrency = this.pos_profile.currency;
+				const baseCurrency = companyCurrency;
+
+				if (
+					this.selected_currency === this.price_list_currency &&
+					this.selected_currency !== companyCurrency
+				) {
+					const conv = this.conversion_rate || 1;
+					item.price_list_rate = this.flt(
+						item.base_price_list_rate / conv,
+						this.currency_precision,
+					);
+
+					if (!item._manual_rate_set) {
+						item.rate = this.flt(item.base_rate / conv, this.currency_precision);
+					}
+				} else if (this.selected_currency !== baseCurrency) {
+					const exchange_rate = this.exchange_rate || 1;
+					item.price_list_rate = this.flt(
+						item.base_price_list_rate * exchange_rate,
+						this.currency_precision,
+					);
+
+					item.rate = this.flt(item.base_rate * exchange_rate, this.currency_precision);
+				} else {
+					item.price_list_rate = item.base_price_list_rate;
+
+					if (!item._manual_rate_set) {
+						item.rate = item.base_rate;
+					}
+				}
+			} else {
+				const baseCurrency = this.price_list_currency || this.pos_profile.currency;
+				if (this.selected_currency !== baseCurrency) {
+					item.price_list_rate = this.flt(
+						item.base_rate * this.exchange_rate,
+						this.currency_precision,
+					);
+				} else {
+					item.price_list_rate = item.base_rate;
+				}
+			}
+
+			if (
+				!item.posa_offer_applied &&
+				this.pos_profile.posa_apply_customer_discount &&
+				this.customer_info.posa_discount > 0 &&
+				this.customer_info.posa_discount <= 100 &&
+				item.posa_is_offer == 0 &&
+				!item.posa_is_replace
+			) {
+				const discount_percent =
+					item.max_discount > 0
+						? Math.min(item.max_discount, this.customer_info.posa_discount)
+						: this.customer_info.posa_discount;
+
+				item.discount_percentage = discount_percent;
+
+				const discount_amount = this.flt(
+					(item.price_list_rate * discount_percent) / 100,
+					this.currency_precision,
+				);
+				item.discount_amount = discount_amount;
+
+				item.base_discount_amount = this.flt(
+					(item.base_price_list_rate * discount_percent) / 100,
+					this.currency_precision,
+				);
+
+				item.rate = this.flt(item.price_list_rate - discount_amount, this.currency_precision);
+				item.base_rate = this.flt(
+					item.base_price_list_rate - item.base_discount_amount,
+					this.currency_precision,
+				);
+			}
+		}
+
+		item.last_purchase_rate = data.last_purchase_rate;
+		item.projected_qty = data.projected_qty;
+		item.reserved_qty = data.reserved_qty;
+		item.conversion_factor = data.conversion_factor;
+		item.stock_qty = data.stock_qty;
+		item.actual_qty = data.actual_qty;
+		item.stock_uom = data.stock_uom;
+		item.has_serial_no = data.has_serial_no;
+		item.has_batch_no = data.has_batch_no;
+
+		item.amount = this.flt(item.qty * item.rate, this.currency_precision);
+		item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
+
+		console.log(`Updated rates for ${item.item_code} on expand:`, {
+			base_rate: item.base_rate,
+			rate: item.rate,
+			base_price_list_rate: item.base_price_list_rate,
+			price_list_rate: item.price_list_rate,
+			exchange_rate: this.exchange_rate,
+			selected_currency: this.selected_currency,
+			default_currency: this.pos_profile.currency,
+		});
+	},
 	// Fetch customer details (info, price list, etc)
 	async fetch_customer_details() {
 		var vm = this;
 		if (!this.customer) return;
 
-		if (isOffline()) {
-			try {
-				const cached = (getCustomerStorage() || []).find(
-					(c) => c.name === vm.customer || c.customer_name === vm.customer,
-				);
-				if (cached) {
-					vm.customer_info = { ...cached };
-					if (vm.pos_profile.posa_force_reload_items && cached.customer_price_list) {
-						vm.selected_price_list = cached.customer_price_list;
-						vm.eventBus.emit("update_customer_price_list", cached.customer_price_list);
-						vm.apply_cached_price_list(cached.customer_price_list);
-					}
-					return;
-				}
-				const queued = (getOfflineCustomers() || [])
-					.map((e) => e.args)
-					.find((c) => c.customer_name === vm.customer);
-				if (queued) {
-					vm.customer_info = { ...queued, name: queued.customer_name };
-					if (vm.pos_profile.posa_force_reload_items && queued.customer_price_list) {
-						vm.selected_price_list = queued.customer_price_list;
-						vm.eventBus.emit("update_customer_price_list", queued.customer_price_list);
-						vm.apply_cached_price_list(queued.customer_price_list);
-					}
-					return;
-				}
+                if (isOffline()) {
+                        try {
+                                const list = await getCustomerStorage();
+                                const cached = (list || []).find(
+                                        (c) => c.name === vm.customer || c.customer_name === vm.customer,
+                                );
+                                if (cached) {
+                                        vm.customer_info = { ...cached };
+                                        if (vm.pos_profile.posa_force_price_from_customer_price_list !== false) {
+                                                const defaultPriceList = vm.pos_profile?.selling_price_list || null;
+                                                const resolvedPriceList = cached.customer_price_list || defaultPriceList;
+                                                vm.selected_price_list = resolvedPriceList;
+                                                vm.eventBus.emit("update_customer_price_list", resolvedPriceList);
+                                                vm.apply_cached_price_list(resolvedPriceList);
+                                        }
+                                        return;
+                                }
+                                const queued = (getOfflineCustomers() || [])
+                                        .map((e) => e.args)
+                                        .find((c) => c.customer_name === vm.customer);
+                                if (queued) {
+                                        vm.customer_info = { ...queued, name: queued.customer_name };
+                                        if (vm.pos_profile.posa_force_price_from_customer_price_list !== false) {
+                                                const defaultPriceList = vm.pos_profile?.selling_price_list || null;
+                                                const resolvedPriceList = queued.customer_price_list || defaultPriceList;
+                                                vm.selected_price_list = resolvedPriceList;
+                                                vm.eventBus.emit("update_customer_price_list", resolvedPriceList);
+                                                vm.apply_cached_price_list(resolvedPriceList);
+                                        }
+                                        return;
+                                }
 			} catch (error) {
 				console.error("Failed to fetch cached customer", error);
 			}
@@ -1618,15 +2308,17 @@ export default {
 			// When force reload is enabled, automatically switch to the
 			// customer's default price list so that item rates are fetched
 			// correctly from the server.
-			if (vm.pos_profile.posa_force_reload_items && message.customer_price_list) {
-				vm.selected_price_list = message.customer_price_list;
-				vm.eventBus.emit("update_customer_price_list", message.customer_price_list);
-				vm.apply_cached_price_list(message.customer_price_list);
-			}
-		} catch (error) {
-			console.error("Failed to fetch customer details", error);
-		}
-	},
+                        if (vm.pos_profile.posa_force_price_from_customer_price_list !== false) {
+                                const defaultPriceList = vm.pos_profile?.selling_price_list || null;
+                                const resolvedPriceList = message.customer_price_list || defaultPriceList;
+                                vm.selected_price_list = resolvedPriceList;
+                                vm.eventBus.emit("update_customer_price_list", resolvedPriceList);
+                                vm.apply_cached_price_list(resolvedPriceList);
+                        }
+                } catch (error) {
+                        console.error("Failed to fetch customer details", error);
+                }
+        },
 
 	// Get price list for current customer
 	get_price_list() {
@@ -1636,97 +2328,167 @@ export default {
 	},
 
 	// Update price list for customer
-	update_price_list() {
-		// Only set the POS Profile price list if it has changed
-		const price_list = this.pos_profile.selling_price_list;
-		if (this.selected_price_list !== price_list) {
-			this.selected_price_list = price_list;
-			// Clear any customer specific price list to avoid reloading items
-			this.eventBus.emit("update_customer_price_list", null);
+        update_price_list() {
+                const price_list = this.pos_profile?.selling_price_list || null;
+                const hasChanged = this.selected_price_list !== price_list;
+                if (hasChanged) {
+                        this.selected_price_list = price_list;
+                } else if (this.selected_price_list === undefined) {
+                        this.selected_price_list = price_list;
+                }
+                this.eventBus.emit("update_customer_price_list", price_list);
+        },
+
+	_applyPriceListRate(item, newRate, priceCurrency) {
+		if (!item) {
+			return;
+		}
+
+		const rate = Number.isFinite(Number(newRate)) ? Number(newRate) : 0;
+		const resolvedCurrency = priceCurrency || this.selected_currency;
+		const manualOverride = item._manual_rate_set === true;
+		const companyCurrency = this.pos_profile?.currency;
+
+		if (!item.original_currency) {
+			item.original_currency = resolvedCurrency;
+		}
+		if (item.original_rate === undefined || item.original_rate === null) {
+			item.original_rate = rate;
+		}
+
+		if (resolvedCurrency === this.selected_currency) {
+			if (resolvedCurrency !== companyCurrency) {
+				const conv = this.conversion_rate || 1;
+				item.base_price_list_rate = rate * conv;
+				if (!manualOverride) {
+					item.base_rate = rate * conv;
+				}
+			} else {
+				item.base_price_list_rate = rate;
+				if (!manualOverride) {
+					item.base_rate = rate;
+				}
+			}
+			item.price_list_rate = rate;
+			if (!manualOverride) {
+				item.rate = rate;
+			}
+		} else {
+			if (rate !== 0 || !item.base_price_list_rate) {
+				item.base_price_list_rate = rate;
+				if (!manualOverride) {
+					item.base_rate = rate;
+				}
+			}
+
+			if (this.selected_currency !== companyCurrency) {
+				const conv = this.exchange_rate || 1;
+				const converted = this.flt(rate * conv, this.currency_precision);
+				if (rate !== 0 || !item.price_list_rate) {
+					item.price_list_rate = converted;
+				}
+				if (!manualOverride && (rate !== 0 || !item.rate)) {
+					item.rate = converted;
+				}
+			} else {
+				if (rate !== 0 || !item.price_list_rate) {
+					item.price_list_rate = rate;
+				}
+				if (!manualOverride && (rate !== 0 || !item.rate)) {
+					item.rate = rate;
+				}
+			}
+		}
+
+		if (typeof item.qty === "number" && typeof item.rate === "number") {
+			item.amount = this.flt(item.qty * item.rate, this.currency_precision);
+		}
+		if (typeof item.qty === "number" && typeof item.base_rate === "number") {
+			item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
 		}
 	},
 
 	// Apply cached price list rates to existing invoice items
 	async apply_cached_price_list(price_list) {
-		const cached = await getCachedPriceListItems(price_list);
-		if (!Array.isArray(cached) || !cached.length) {
-			return;
+		const targetPriceList = price_list || this.pos_profile?.selling_price_list;
+		const cached = targetPriceList ? await getCachedPriceListItems(targetPriceList) : null;
+
+		const fallbackItems = [];
+
+		if (Array.isArray(this.items)) {
+			if (Array.isArray(cached) && cached.length) {
+				const priceMap = new Map();
+				cached.forEach((row) => {
+					if (row && row.item_code) {
+						priceMap.set(row.item_code, row);
+					}
+				});
+
+				this.items.forEach((item) => {
+					if (!item || !item.item_code) {
+						return;
+					}
+					const row = priceMap.get(item.item_code);
+					if (row) {
+						const rate = row.rate ?? row.price_list_rate ?? 0;
+						const currency = row.currency || this.selected_currency;
+						this._applyPriceListRate(item, rate, currency);
+					} else {
+						fallbackItems.push(item);
+					}
+				});
+			} else {
+				fallbackItems.push(...this.items);
+			}
 		}
 
-		const map = {};
-		cached.forEach((ci) => {
-			map[ci.item_code] = ci;
-		});
+		if (fallbackItems.length && !isOffline() && targetPriceList) {
+			try {
+				const response = await frappe.call({
+					method: "posawesome.posawesome.api.items.get_items_details",
+					args: {
+						pos_profile: JSON.stringify(this.pos_profile),
+						items_data: JSON.stringify(fallbackItems),
+						price_list: targetPriceList,
+					},
+				});
 
-		this.items.forEach((item) => {
-			const ci = map[item.item_code];
-			if (!ci) return;
+				const details = response?.message;
+				if (Array.isArray(details) && details.length) {
+					const detailMap = new Map();
+					details.forEach((detail) => {
+						if (!detail) {
+							return;
+						}
+						const key = detail.posa_row_id || detail.item_code;
+						if (key) {
+							detailMap.set(key, detail);
+						}
+					});
 
-			const newRate = ci.rate || ci.price_list_rate;
-			const priceCurrency = ci.currency || this.selected_currency;
-
-			if (!item.original_currency) {
-				item.original_currency = priceCurrency;
+					fallbackItems.forEach((item) => {
+						if (!item) {
+							return;
+						}
+						const key = item.posa_row_id || item.item_code;
+						const detail = detailMap.get(key);
+						if (!detail) {
+							return;
+						}
+						const rate = detail.price_list_rate ?? detail.rate ?? 0;
+						const currency = detail.currency || detail.price_list_currency || this.selected_currency;
+						this._applyPriceListRate(item, rate, currency);
+					});
+				}
+			} catch (error) {
+				console.error("Failed to refresh price list rates for invoice items", error);
 			}
-			if (!item.original_rate) {
-				item.original_rate = newRate;
-			}
+		}
 
-			if (priceCurrency === this.selected_currency) {
-				const companyCurrency = this.pos_profile.currency;
-				if (priceCurrency !== companyCurrency) {
-					const conv = this.conversion_rate || 1;
-					item.base_price_list_rate = newRate * conv;
-					if (!item._manual_rate_set) {
-						item.base_rate = newRate * conv;
-					}
-				} else {
-					item.base_price_list_rate = newRate;
-					if (!item._manual_rate_set) {
-						item.base_rate = newRate;
-					}
-				}
-				item.price_list_rate = newRate;
-				if (!item._manual_rate_set) {
-					item.rate = newRate;
-				}
-			} else {
-				// Rate in base currency
-				if (newRate !== 0 || !item.base_price_list_rate) {
-					item.base_price_list_rate = newRate;
-					if (!item._manual_rate_set) {
-						item.base_rate = newRate;
-					}
-				}
-
-				const baseCurrency = this.pos_profile.currency;
-				if (this.selected_currency !== baseCurrency) {
-					const conv = this.exchange_rate || 1;
-					const convRate = this.flt(newRate * conv, this.currency_precision);
-					if (newRate !== 0 || !item.price_list_rate) {
-						item.price_list_rate = convRate;
-					}
-					if (!item._manual_rate_set && (newRate !== 0 || !item.rate)) {
-						item.rate = convRate;
-					}
-				} else {
-					if (newRate !== 0 || !item.price_list_rate) {
-						item.price_list_rate = newRate;
-					}
-					if (!item._manual_rate_set && (newRate !== 0 || !item.rate)) {
-						item.rate = newRate;
-					}
-				}
-			}
-
-			// Recalculate final amounts
-			item.amount = this.flt(item.qty * item.rate, this.currency_precision);
-			item.base_amount = this.flt(item.qty * item.base_rate, this.currency_precision);
-		});
-
-		this.$forceUpdate();
+		if (typeof this.$forceUpdate === "function") {
+			this.$forceUpdate();
+		}
 	},
-
 	// Update additional discount amount based on percentage
 	update_discount_umount() {
 		return updateDiscountAmount(this);
@@ -1744,103 +2506,85 @@ export default {
 
 	// Update UOM (unit of measure) for an item and recalculate prices
 	calc_uom(item, value) {
-		return calcUom(item, value, this);
+		if (!item) {
+			return;
+		}
+		return this.queueItemTask(item, "calc_uom", () => calcUom(item, value, this));
 	},
 
-	// Calculate stock quantity for an item with stock validation
+	// Calculate stock quantity for an item (simplified - validation handled centrally)
 	calc_stock_qty(item, value) {
 		calcStockQty(item, value, this);
 		if (this.update_qty_limits) {
 			this.update_qty_limits(item);
 		}
-		if (item.max_qty !== undefined && flt(item.qty) > flt(item.max_qty)) {
-			const blockSale =
-				!this.stock_settings.allow_negative_stock ||
-				this.pos_profile.posa_block_sale_beyond_available_qty;
-			if (blockSale) {
-				item.qty = item.max_qty;
-				calcStockQty(item, item.qty, this);
-				this.$forceUpdate();
-				this.eventBus.emit("show_message", {
-					title: __(`Maximum available quantity is {0}. Quantity adjusted to match stock.`, [
-						this.formatFloat(item.max_qty),
-					]),
-					color: "error",
-				});
-			} else {
-				this.eventBus.emit("show_message", {
-					title: __("Stock is lower than requested. Proceeding may create negative stock."),
-					color: "warning",
-				});
-			}
+
+		if (flt(item.qty) === 0) {
+			this.remove_item(item);
+			this.$forceUpdate();
 		}
 	},
 
-	// Update quantity limits based on available stock
-	update_qty_limits(item) {
-		if (item && item.available_qty !== undefined) {
-			item.max_qty = flt(item.available_qty / (item.conversion_factor || 1));
+	// Update quantity limits based on available stock (simplified - validation handled centrally)
+        update_qty_limits(item) {
+                if (item && item.is_stock_item === 0) {
+                        item.max_qty = undefined;
+                        item.disable_increment = false;
+                        return;
+                }
 
-			if (item.max_qty !== undefined && flt(item.qty) > flt(item.max_qty)) {
-				const blockSale =
-					!this.stock_settings.allow_negative_stock ||
-					this.pos_profile.posa_block_sale_beyond_available_qty;
-				if (blockSale) {
-					item.qty = item.max_qty;
-					calcStockQty(item, item.qty, this);
-					this.$forceUpdate();
-					this.eventBus.emit("show_message", {
-						title: __(`Maximum available quantity is {0}. Quantity adjusted to match stock.`, [
-							this.formatFloat(item.max_qty),
+                if (item && item.available_qty !== undefined) {
+                        item.max_qty = flt(item.available_qty / (item.conversion_factor || 1));
+
+                        // Set increment disable flag based on stock limits
+                        item.disable_increment =
+                                (!this.stock_settings.allow_negative_stock || this.blockSaleBeyondAvailableQty) &&
+                                item.qty >= item.max_qty;
+                }
+        },
+
+        // Fetch available stock for an item and cache it
+        async fetch_available_qty(item) {
+                if (!item || !item.item_code || !item.warehouse || item.is_stock_item === 0) return;
+
+		const key = this._getStockCacheKey(item);
+		const cachedQty = this._getCachedStockQty(key);
+		if (cachedQty !== null && cachedQty !== undefined) {
+			item.available_qty = cachedQty;
+			this.update_qty_limits(item);
+			return cachedQty;
+		}
+
+		const runner = async () => {
+			try {
+				const response = await frappe.call({
+					method: "posawesome.posawesome.api.items.get_available_qty",
+					args: {
+						items: JSON.stringify([
+							{
+								item_code: item.item_code,
+								warehouse: item.warehouse,
+								batch_no: item.batch_no,
+							},
 						]),
-						color: "error",
-					});
-				} else {
-					this.eventBus.emit("show_message", {
-						title: __("Stock is lower than requested. Proceeding may create negative stock."),
-						color: "warning",
-					});
+					},
+				});
+				const qty =
+					response.message && response.message.length ? flt(response.message[0].available_qty) : 0;
+				this._storeStockQty(key, qty);
+				if (this.available_stock_cache) {
+					this.available_stock_cache[key] = { qty, ts: Date.now() };
 				}
+				item.available_qty = qty;
+				this.update_qty_limits(item);
+				return qty;
+			} catch (error) {
+				console.error("Failed to fetch available qty", error);
+				throw error;
 			}
+		};
 
-			item.disable_increment =
-				(!this.stock_settings.allow_negative_stock ||
-					this.pos_profile.posa_block_sale_beyond_available_qty) &&
-				item.qty >= item.max_qty;
-		}
-	},
-
-	// Fetch available stock for an item and cache it
-	async fetch_available_qty(item) {
-		if (!item || !item.item_code || !item.warehouse) return;
-		const key = `${item.item_code}:${item.warehouse}:${item.batch_no || ""}:${item.uom}`;
-		const cached = this.available_stock_cache[key];
-		const now = Date.now();
-		if (cached && now - cached.ts < 60000) {
-			item.available_qty = cached.qty;
-			this.update_qty_limits(item);
-			return;
-		}
-		try {
-			const r = await frappe.call({
-				method: "posawesome.posawesome.api.items.get_available_qty",
-				args: {
-					items: JSON.stringify([
-						{
-							item_code: item.item_code,
-							warehouse: item.warehouse,
-							batch_no: item.batch_no,
-						},
-					]),
-				},
-			});
-			const qty = r.message && r.message.length ? flt(r.message[0].available_qty) : 0;
-			this.available_stock_cache[key] = { qty, ts: now };
-			item.available_qty = qty;
-			this.update_qty_limits(item);
-		} catch (e) {
-			console.error("Failed to fetch available qty", e);
-		}
+		return this.queueItemTask(item, "fetch_available_qty", runner);
 	},
 
 	// Set serial numbers for an item (and update qty)
@@ -1863,7 +2607,7 @@ export default {
 					fieldname: "new_rate",
 					fieldtype: "Float",
 					label: __("New Price List Rate"),
-					default: item.price_list_rate || item.rate,
+					default: item.price_list_rate ?? item.rate ?? 0,
 					reqd: 1,
 				},
 			],
