@@ -3,11 +3,11 @@ import { ref, onUnmounted } from "vue";
 const API_URL = "/api/method/posawesome.posawesome.api.utilities.get_server_usage";
 
 export function useServerCpu(pollInterval = 10000, windowSize = 60) {
-    const cpu = ref(null);
-    const memory = ref(null);
-    const memoryTotal = ref(null);
-    const memoryUsed = ref(null);
-    const memoryAvailable = ref(null);
+    const cpu = ref<number | null>(null);
+    const memory = ref<number | null>(null);
+    const memoryTotal = ref<number | null>(null);
+    const memoryUsed = ref<number | null>(null);
+    const memoryAvailable = ref<number | null>(null);
     const history = ref([]);
     const loading = ref(true);
     const error = ref(null);
