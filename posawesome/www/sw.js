@@ -1,5 +1,175 @@
-const CACHE_NAME = "posawesome-cache-v1";
+const CACHE_PREFIX = "posawesome-cache-";
+const VERSION_URL = "/assets/posawesome/dist/js/version.json";
+const DEFAULT_CACHE_VERSION = "default";
 const MAX_CACHE_ITEMS = 1000;
+
+const STATIC_PRECACHE_URLS = [
+	"/app/posapp",
+	"/assets/posawesome/dist/js/posapp/workers/itemWorker.js",
+	"/assets/posawesome/dist/js/libs/dexie.min.js",
+	"/manifest.json",
+	"/offline.html",
+];
+
+function buildVersionedAssetUrl(url, version) {
+	return `${url}?v=${encodeURIComponent(version || DEFAULT_CACHE_VERSION)}`;
+}
+
+function pickAssetUrl(assets, key, fallbackPath, version) {
+	// Entries are now content-hashed at build time (see
+	// build-manifest.js). The hashed filename is published in
+	// version.json -> assets[key]; fall back to the legacy un-hashed
+	// path for transitional rollouts where an old version.json is
+	// still being served.
+	const value = typeof assets?.[key] === "string" ? assets[key].trim() : "";
+	if (value) {
+		return value;
+	}
+	return buildVersionedAssetUrl(fallbackPath, version);
+}
+
+function getPrecacheUrls(version, assets = {}) {
+	const fontAssets = Array.isArray(assets.fonts)
+		? assets.fonts.filter((url) => typeof url === "string" && url.trim())
+		: [];
+	return [
+		pickAssetUrl(assets, "loader", "/assets/posawesome/dist/js/loader.js", version),
+		pickAssetUrl(assets, "css", "/assets/posawesome/dist/js/posawesome.css", version),
+		pickAssetUrl(assets, "posawesome", "/assets/posawesome/dist/js/posawesome.js", version),
+		pickAssetUrl(assets, "offlineIndex", "/assets/posawesome/dist/js/offline/index.js", version),
+		...fontAssets,
+		...STATIC_PRECACHE_URLS,
+	];
+}
+
+let cachedCacheName = null;
+let cacheNameInFlight = null;
+let currentVersion = null;
+let currentAssets = {};
+
+async function precacheUrls(cacheName, version, assets = {}) {
+	const cache = await caches.open(cacheName);
+	await Promise.all(
+		getPrecacheUrls(version, assets).map(async (url) => {
+			try {
+				const resp = await fetch(url);
+				if (resp && resp.ok) {
+					await cache.put(url, resp.clone());
+				}
+			} catch (err) {
+				console.warn("SW install failed to fetch", url, err);
+			}
+		}),
+	);
+	await enforceCacheLimit(cache);
+	return cache;
+}
+
+async function cleanupObsoleteCaches(activeCacheName) {
+	const keys = await caches.keys();
+	await Promise.all(keys.filter((key) => key !== activeCacheName).map((key) => caches.delete(key)));
+}
+
+function postVersionMessage(target) {
+	if (!currentVersion) return;
+	const message = {
+		type: "SW_VERSION_INFO",
+		version: currentVersion,
+		timestamp: Number(currentVersion),
+	};
+	if (target && typeof target.postMessage === "function") {
+		target.postMessage(message);
+	}
+}
+
+function extractBuildVersion(payload) {
+	const version = payload?.version || payload?.buildVersion;
+	return typeof version === "string" && version.trim().length ? version.trim() : DEFAULT_CACHE_VERSION;
+}
+
+function extractBuildAssets(payload) {
+	return payload?.assets && typeof payload.assets === "object" ? payload.assets : {};
+}
+
+// Listen for version check messages
+self.addEventListener("message", (event) => {
+	const payload = event.data || {};
+	if (payload.type === "CHECK_VERSION") {
+		if (event.ports && event.ports[0]) {
+			postVersionMessage(event.ports[0]);
+		} else if (event.source) {
+			postVersionMessage(event.source);
+		}
+		return;
+	}
+	if (payload.type === "SKIP_WAITING") {
+		self.skipWaiting();
+		return;
+	}
+	if (payload.type === "REFRESH_CACHE_VERSION") {
+		const target = (event.ports && event.ports[0]) || event.source || null;
+		const task = refreshCacheVersion(target);
+		if (typeof event.waitUntil === "function") {
+			event.waitUntil(task);
+		}
+		return;
+	}
+	if (payload.type === "CLIENT_FORCE_UNREGISTER") {
+		const task = forceUnregisterServiceWorker();
+		if (typeof event.waitUntil === "function") {
+			event.waitUntil(task);
+		}
+	}
+});
+
+async function resolveBuildMetadata(forceRefresh = false) {
+	if (forceRefresh) {
+		currentVersion = null;
+		currentAssets = {};
+	}
+	try {
+		const response = await fetch(VERSION_URL, { cache: "no-store" });
+		if (response && response.ok) {
+			const payload = await response.json();
+			currentVersion = extractBuildVersion(payload);
+			currentAssets = extractBuildAssets(payload);
+			return {
+				version: currentVersion,
+				assets: currentAssets,
+			};
+		}
+	} catch (err) {
+		console.warn("SW: failed to fetch build version", err);
+	}
+	return {
+		version: DEFAULT_CACHE_VERSION,
+		assets: currentAssets || {},
+	};
+}
+
+async function getCacheName(forceRefresh = false, resolvedMetadata = null) {
+	if (forceRefresh) {
+		cachedCacheName = null;
+		cacheNameInFlight = null;
+	}
+	if (cachedCacheName) {
+		return cachedCacheName;
+	}
+	if (cacheNameInFlight) {
+		return cacheNameInFlight;
+	}
+	cacheNameInFlight = (async () => {
+		const metadata = resolvedMetadata || (await resolveBuildMetadata(forceRefresh));
+		const version = metadata?.version || DEFAULT_CACHE_VERSION;
+		const name = `${CACHE_PREFIX}${version}`;
+		if (version !== DEFAULT_CACHE_VERSION) {
+			cachedCacheName = name;
+		}
+		cacheNameInFlight = null;
+		return name;
+	})();
+	return cacheNameInFlight;
+}
 
 async function enforceCacheLimit(cache) {
 	const keys = await cache.keys();
@@ -11,36 +181,37 @@ async function enforceCacheLimit(cache) {
 	}
 }
 
+async function refreshCacheVersion(target) {
+	const metadata = await resolveBuildMetadata(true);
+	const activeCacheName = await getCacheName(true, metadata);
+	await precacheUrls(activeCacheName, metadata.version, metadata.assets);
+	await cleanupObsoleteCaches(activeCacheName);
+	postVersionMessage(target);
+	const clients = await self.clients.matchAll({
+		type: "window",
+		includeUncontrolled: true,
+	});
+	clients.forEach(postVersionMessage);
+	return activeCacheName;
+}
+
+async function forceUnregisterServiceWorker() {
+	cachedCacheName = null;
+	cacheNameInFlight = null;
+	currentVersion = null;
+	currentAssets = {};
+	const keys = await caches.keys();
+	await Promise.all(keys.map((key) => caches.delete(key)));
+	await self.registration.unregister();
+}
+
 self.addEventListener("install", (event) => {
 	self.skipWaiting();
 	event.waitUntil(
 		(async () => {
-			const cache = await caches.open(CACHE_NAME);
-			const resources = [
-				"/app/posapp",
-                                "/assets/posawesome/dist/js/posawesome.umd.js",
-
-                                "/assets/posawesome/dist/js/offline/index.js",
-
-                                "/assets/posawesome/dist/js/posapp/workers/itemWorker.js",
-                                "/assets/posawesome/dist/js/libs/dexie.min.js",
-
-				"/manifest.json",
-				"/offline.html",
-			];
-			await Promise.all(
-				resources.map(async (url) => {
-					try {
-						const resp = await fetch(url);
-						if (resp && resp.ok) {
-							await cache.put(url, resp.clone());
-						}
-					} catch (err) {
-						console.warn("SW install failed to fetch", url, err);
-					}
-				}),
-			);
-			await enforceCacheLimit(cache);
+			const metadata = await resolveBuildMetadata();
+			const cacheName = await getCacheName(false, metadata);
+			await precacheUrls(cacheName, metadata.version, metadata.assets);
 		})(),
 	);
 });
@@ -48,11 +219,15 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
 	event.waitUntil(
 		(async () => {
-			const keys = await caches.keys();
-			await Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)));
-			const cache = await caches.open(CACHE_NAME);
+			const metadata = await resolveBuildMetadata();
+			const activeCacheName = await getCacheName(false, metadata);
+			await precacheUrls(activeCacheName, metadata.version, metadata.assets);
+			await cleanupObsoleteCaches(activeCacheName);
+			const cache = await caches.open(activeCacheName);
 			await enforceCacheLimit(cache);
 			await self.clients.claim();
+			const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+			clients.forEach(postVersionMessage);
 		})(),
 	);
 });
@@ -65,29 +240,38 @@ self.addEventListener("fetch", (event) => {
 
 	if (event.request.url.includes("socket.io")) return;
 
-	if (event.request.mode === "navigate") {
+	const assetDestinations = ["style", "script", "worker", "font", "image"];
+	const isAssetRequest = assetDestinations.includes(event.request.destination);
+	const isPosawesomeAsset = url.pathname.startsWith("/assets/posawesome/");
+	const isNavigation = event.request.mode === "navigate";
+
+	if (!isNavigation && !isAssetRequest && !isPosawesomeAsset) {
+		return;
+	}
+
+	if (isNavigation) {
 		event.respondWith(
 			(async () => {
-                                try {
-                                        return await fetch(event.request);
-                                } catch (err) {
-                                        const cached = await caches.match(event.request, { ignoreSearch: true });
-                                        if (cached) {
-                                                return cached;
-                                        }
+				try {
+					return await fetch(event.request);
+				} catch (err) {
+					const cached = await caches.match(event.request, { ignoreSearch: true });
+					if (cached) {
+						return cached;
+					}
 
-                                        const appShell = await caches.match("/app/posapp");
-                                        if (appShell) {
-                                                return appShell;
-                                        }
+					const appShell = await caches.match("/app/posapp");
+					if (appShell) {
+						return appShell;
+					}
 
-                                        const offlinePage = await caches.match("/offline.html");
-                                        if (offlinePage) {
-                                                return offlinePage;
-                                        }
+					const offlinePage = await caches.match("/offline.html");
+					if (offlinePage) {
+						return offlinePage;
+					}
 
-                                        return Response.error();
-                                }
+					return Response.error();
+				}
 			})(),
 		);
 		return;
@@ -95,30 +279,41 @@ self.addEventListener("fetch", (event) => {
 
 	event.respondWith(
 		(async () => {
+			const cacheName = await getCacheName();
+			const hasVersionQuery = url.searchParams.has("v");
 			try {
+				const response = await fetch(event.request);
+				const cacheableTypes = ["basic", "default", "cors"];
+				if (
+					response &&
+					response.ok &&
+					response.status === 200 &&
+					cacheableTypes.includes(response.type)
+				) {
+					try {
+						const cache = await caches.open(cacheName);
+						await cache.put(event.request, response.clone());
+						await enforceCacheLimit(cache);
+					} catch (cacheError) {
+						console.warn("SW cache put failed", cacheError);
+					}
+				}
+				return response;
+			} catch (networkError) {
 				const cached = await caches.match(event.request);
 				if (cached) {
 					return cached;
 				}
-				const resp = await fetch(event.request);
-				if (resp && resp.ok && resp.status === 200) {
-					try {
-						const clone = resp.clone();
-						const cache = await caches.open(CACHE_NAME);
-						await cache.put(event.request, clone);
-						await enforceCacheLimit(cache);
-					} catch (e) {
-						console.warn("SW cache put failed", e);
+
+				if (!hasVersionQuery) {
+					const fallback = await caches.match(event.request, {
+						ignoreSearch: true,
+					});
+					if (fallback) {
+						return fallback;
 					}
 				}
-				return resp;
-			} catch (err) {
-				try {
-					const fallback = await caches.match(event.request);
-					return fallback || Response.error();
-				} catch (e) {
-					return Response.error();
-				}
+				return Response.error();
 			}
 		})(),
 	);

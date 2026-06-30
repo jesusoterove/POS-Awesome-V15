@@ -3,16 +3,50 @@
 # For license information, please see license.txt
 
 from __future__ import unicode_literals
-import json
+
 import frappe
 from frappe.utils import cstr, add_to_date, get_datetime
-from typing import List, Dict
+from typing import List, Dict, Any
 import time
 import os
-import psutil
+import re
+import json
+import subprocess
+
+from posawesome import __version__ as POS_AWESOME_APP_VERSION
+
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional dependency
+    psutil = None
+
+_PSUTIL_MISSING_LOGGED = False
 import functools
 
-from .utils import get_item_groups
+from .utils import get_item_groups, fetch_sales_person_names
+from posawesome.utils import get_build_version
+
+POS_AWESOME_REPO_URL = "https://github.com/defendicon/POS-Awesome-V15"
+
+
+def _normalize_release_tag(version):
+    tag = cstr(version).strip()
+    if tag.startswith("v") and len(tag) > 1 and tag[1].isdigit():
+        tag = tag[1:]
+    return tag or None
+
+
+def _build_release_url(version):
+    tag = _normalize_release_tag(version)
+    return f"{POS_AWESOME_REPO_URL}/releases/tag/{tag}" if tag else None
+
+
+def _get_update_metadata() -> Dict[str, Any]:
+    return {
+        "app_version": POS_AWESOME_APP_VERSION,
+        "repo_url": POS_AWESOME_REPO_URL,
+        "release_url": _build_release_url(POS_AWESOME_APP_VERSION),
+    }
 
 
 def get_version():
@@ -42,6 +76,10 @@ def get_app_branch(app):
 
 def get_root_of(doctype):
     """Get root element of a DocType with a tree structure"""
+    # Security: Validate doctype to prevent SQL injection since it's used in FROM clause
+    if not re.match(r"^[a-zA-Z0-9 _-]+$", doctype):
+        return None
+
     result = frappe.db.sql(
         """select t1.name from `tab{0}` t1 where
 		(select count(*) from `tab{1}` t2 where
@@ -67,17 +105,16 @@ def get_item_group_condition(pos_profile, item_groups=None):
     cond = " and 1=1"
     item_groups = item_groups or get_item_groups(pos_profile)
     if item_groups:
-        cond = " and item_group in (%s)" % (", ".join(["%s"] * len(item_groups)))
-        return cond % tuple(item_groups)
+        # Security: Escape values to prevent SQL injection
+        escaped_groups = [frappe.db.escape(g) for g in item_groups]
+        cond = " and item_group in ({0})".format(", ".join(escaped_groups))
 
     return cond
 
 
 def add_taxes_from_tax_template(item, parent_doc):
     accounts_settings = frappe.get_cached_doc("Accounts Settings")
-    add_taxes_from_item_tax_template = (
-        accounts_settings.add_taxes_from_item_tax_template
-    )
+    add_taxes_from_item_tax_template = accounts_settings.add_taxes_from_item_tax_template
     if item.get("item_tax_template") and add_taxes_from_item_tax_template:
         item_tax_template = item.get("item_tax_template")
         taxes_template_details = frappe.get_all(
@@ -113,9 +150,7 @@ def set_batch_nos_for_bundels(doc, warehouse_field, throw=False):
         warehouse = d.get(warehouse_field, None)
         if has_batch_no and warehouse and qty > 0:
             if not d.batch_no:
-                d.batch_no = get_batch_no(
-                    d.item_code, warehouse, qty, throw, d.serial_no
-                )
+                d.batch_no = get_batch_no(d.item_code, warehouse, qty, throw, d.serial_no)
             else:
                 batch_qty = get_batch_qty(batch_no=d.batch_no, warehouse=warehouse)
                 if flt(batch_qty, d.precision("qty")) < flt(qty, d.precision("qty")):
@@ -160,7 +195,206 @@ def get_app_info() -> Dict[str, List[Dict[str, str]]]:
 
         apps_info.append({"app_name": app_name, "installed_version": app_version})
 
-    return {"apps": apps_info}
+    return {"apps": apps_info, "build_version": get_build_version(), **_get_update_metadata()}
+
+
+def _get_git_commit_info(app_name: str = "posawesome") -> Dict[str, Any]:
+    """Best-effort git commit details for the given app."""
+    try:
+        app_path = frappe.get_app_path(app_name)
+    except Exception:
+        return {}
+
+    if not app_path or not os.path.exists(app_path):
+        return {}
+
+    def _run(cmd: List[str]) -> str:
+        return subprocess.check_output(cmd, cwd=app_path, stderr=subprocess.DEVNULL).decode("utf-8").strip()
+
+    try:
+        commit_hash = _run(["git", "rev-parse", "HEAD"])
+        commit_message = _run(["git", "log", "-1", "--pretty=%B"])
+        commit_date = _run(["git", "log", "-1", "--pretty=%cI"])
+        return {
+            "commit_hash": commit_hash,
+            "commit_message": commit_message,
+            "commit_date": commit_date,
+        }
+    except Exception:
+        return {}
+
+
+@frappe.whitelist()
+def get_build_info() -> Dict[str, Any]:
+    """Return build version + latest git commit info for update prompts."""
+    data: Dict[str, Any] = {"build_version": get_build_version(), **_get_update_metadata()}
+    data.update(_get_git_commit_info("posawesome"))
+    return data
+
+
+def _fetch_remote(app_path: str) -> None:
+    try:
+        subprocess.check_output(
+            ["git", "fetch", "origin", "--prune", "--quiet"],
+            cwd=app_path,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return
+
+
+def _get_remote_heads(app_path: str) -> Dict[str, str]:
+    try:
+        output = (
+            subprocess.check_output(
+                ["git", "for-each-ref", "refs/remotes/origin", "--format=%(refname:short) %(objectname)"],
+                cwd=app_path,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        heads = {}
+        for line in output.splitlines():
+            parts = line.strip().split(" ")
+            if len(parts) != 2:
+                continue
+            ref, sha = parts
+            if ref == "origin/HEAD":
+                continue
+            branch = ref.replace("origin/", "", 1)
+            heads[branch] = sha
+        return heads
+    except Exception:
+        return {}
+
+
+def _get_commit_details(app_path: str, ref: str) -> Dict[str, str]:
+    try:
+        commit_message = (
+            subprocess.check_output(
+                ["git", "log", "-1", "--pretty=%B", ref],
+                cwd=app_path,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        commit_date = (
+            subprocess.check_output(
+                ["git", "log", "-1", "--pretty=%cI", ref],
+                cwd=app_path,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        commit_hash = (
+            subprocess.check_output(
+                ["git", "rev-parse", ref],
+                cwd=app_path,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        return {
+            "commit_hash": commit_hash,
+            "commit_message": commit_message,
+            "commit_date": commit_date,
+        }
+    except Exception:
+        return {}
+
+
+def _get_commit_list(app_path: str, range_ref: str, limit: int = 20) -> List[Dict[str, str]]:
+    try:
+        output = (
+            subprocess.check_output(
+                [
+                    "git",
+                    "log",
+                    range_ref,
+                    f"--max-count={limit}",
+                    "--pretty=%H%x1f%h%x1f%s%x1f%cI",
+                ],
+                cwd=app_path,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        commits: List[Dict[str, str]] = []
+        for line in output.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) != 4:
+                continue
+            full_hash, short_hash, subject, commit_date = parts
+            commits.append(
+                {
+                    "commit_hash": full_hash,
+                    "commit_short": short_hash,
+                    "commit_message": subject,
+                    "commit_date": commit_date,
+                }
+            )
+        return commits
+    except Exception:
+        return []
+
+
+def _get_current_branch(app_path: str) -> str:
+    try:
+        branch = (
+            subprocess.check_output(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=app_path,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+        return branch
+    except Exception:
+        return ""
+
+
+@frappe.whitelist()
+def get_remote_update_info() -> Dict[str, Any]:
+    data: Dict[str, Any] = {"build_version": get_build_version(), **_get_update_metadata()}
+    base = _get_git_commit_info("posawesome")
+    if base:
+        data.update(base)
+
+    try:
+        app_path = frappe.get_app_path("posawesome")
+    except Exception:
+        return data
+
+    if not app_path or not os.path.exists(app_path):
+        return data
+
+    _fetch_remote(app_path)
+    heads = _get_remote_heads(app_path)
+    data["remote_heads"] = heads
+    current_branch = _get_current_branch(app_path)
+    if current_branch:
+        data["current_branch"] = current_branch
+
+    current_hash = base.get("commit_hash") if base else None
+    if heads and current_hash and current_branch:
+        remote_head = heads.get(current_branch)
+        if remote_head and remote_head != current_hash:
+            different = {current_branch: remote_head}
+            data["remote_ahead"] = different
+            ref = f"origin/{current_branch}"
+            details = _get_commit_details(app_path, ref)
+            if details:
+                data["remote_sample_branch"] = current_branch
+                data["remote_sample"] = details
+            data["remote_commits"] = _get_commit_list(app_path, f"{current_hash}..{ref}")
+
+    return data
 
 
 def ensure_child_doctype(doc, table_field, child_doctype):
@@ -171,25 +405,8 @@ def ensure_child_doctype(doc, table_field, child_doctype):
 
 
 @frappe.whitelist()
-def get_sales_person_names():
-    import json
-
-    print("Fetching sales persons...")
-    try:
-        sales_persons = frappe.get_list(
-            "Sales Person",
-            filters={"enabled": 1},
-            fields=["name", "sales_person_name"],
-            limit_page_length=100000,
-        )
-        print(f"Found {len(sales_persons)} sales persons: {json.dumps(sales_persons)}")
-        return sales_persons
-    except Exception as e:
-        print(f"Error fetching sales persons: {str(e)}")
-        frappe.log_error(
-            f"Error fetching sales persons: {str(e)}", "POS Sales Person Error"
-        )
-        return []
+def get_sales_person_names(pos_profile=None):
+    return fetch_sales_person_names(pos_profile=pos_profile)
 
 
 @frappe.whitelist()
@@ -217,9 +434,7 @@ def get_language_options():
 
     # Also include languages from the Translation doctype, if available
     if frappe.db.table_exists("Translation"):
-        rows = frappe.db.sql(
-            "SELECT DISTINCT language FROM `tabTranslation` WHERE language IS NOT NULL"
-        )
+        rows = frappe.db.sql("SELECT DISTINCT language FROM `tabTranslation` WHERE language IS NOT NULL")
         for (language,) in rows:
             languages.add(normalize(language))
 
@@ -288,18 +503,16 @@ def get_database_usage():
             db_name = frappe.conf.get("db_name") or frappe.db.get_database_name()
             db_size = frappe.db.sql("SELECT pg_database_size(%s)", (db_name,))[0][0]
             db_size = int(db_size)
-            db_connections = frappe.db.sql("SELECT count(*) FROM pg_stat_activity;")[0][
-                0
-            ]
+            db_connections = frappe.db.sql("SELECT count(*) FROM pg_stat_activity;")[0][0]
             db_slow_queries = frappe.db.sql(
                 "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND now() - query_start > interval '1 second';"
             )[0][0]
             db_table_count = frappe.db.sql(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';"
             )[0][0]
-            db_total_rows = frappe.db.sql(
-                "SELECT sum(reltuples)::bigint FROM pg_class WHERE relkind='r';"
-            )[0][0]
+            db_total_rows = frappe.db.sql("SELECT sum(reltuples)::bigint FROM pg_class WHERE relkind='r';")[
+                0
+            ][0]
             db_top_tables = frappe.db.sql(
                 """
                 SELECT relname, pg_total_relation_size(relid) AS size
@@ -315,13 +528,9 @@ def get_database_usage():
                 (db_name,),
             )[0][0]
             db_size = int(db_size)
-            db_connections = frappe.db.sql(
-                "SHOW STATUS WHERE variable_name = 'Threads_connected';"
-            )[0][1]
+            db_connections = frappe.db.sql("SHOW STATUS WHERE variable_name = 'Threads_connected';")[0][1]
             db_connections = int(db_connections)
-            db_slow_queries = frappe.db.sql(
-                "SHOW GLOBAL STATUS WHERE variable_name = 'Slow_queries';"
-            )[0][1]
+            db_slow_queries = frappe.db.sql("SHOW GLOBAL STATUS WHERE variable_name = 'Slow_queries';")[0][1]
             db_slow_queries = int(db_slow_queries)
             db_table_count = frappe.db.sql(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema = %s",
@@ -365,33 +574,33 @@ def get_database_usage():
 
 @frappe.whitelist()
 def get_server_usage():
-    try:
+    global _PSUTIL_MISSING_LOGGED
 
-        cpu_percent = psutil.cpu_percent(interval=0.5)
-        mem = psutil.virtual_memory()
-        memory_percent = mem.percent
-        memory_total = mem.total
-        memory_used = mem.used
-        memory_available = mem.available
-        load_avg = os.getloadavg() if hasattr(os, "getloadavg") else (0, 0, 0)
-        uptime = time.time() - psutil.boot_time()
-    except ImportError:
-        cpu_percent = None
-        memory_percent = None
-        memory_total = None
-        memory_used = None
-        memory_available = None
-        load_avg = (None, None, None)
-        uptime = None
-    except Exception as e:
-        frappe.log_error(f"Server usage error: {e}")
-        cpu_percent = None
-        memory_percent = None
-        memory_total = None
-        memory_used = None
-        memory_available = None
-        load_avg = (None, None, None)
-        uptime = None
+    cpu_percent = None
+    memory_percent = None
+    memory_total = None
+    memory_used = None
+    memory_available = None
+    load_avg = (None, None, None)
+    uptime = None
+
+    if psutil is None:
+        if not _PSUTIL_MISSING_LOGGED:
+            frappe.log_error("psutil is not installed; server usage metrics unavailable.")
+            _PSUTIL_MISSING_LOGGED = True
+    else:
+        try:
+
+            cpu_percent = psutil.cpu_percent(interval=0.5)
+            mem = psutil.virtual_memory()
+            memory_percent = mem.percent
+            memory_total = mem.total
+            memory_used = mem.used
+            memory_available = mem.available
+            load_avg = os.getloadavg() if hasattr(os, "getloadavg") else (0, 0, 0)
+            uptime = time.time() - psutil.boot_time()
+        except Exception as e:
+            frappe.log_error(f"Server usage error: {e}")
     return {
         "cpu_percent": cpu_percent,
         "memory_percent": memory_percent,
@@ -410,6 +619,53 @@ _LANGUAGE_CACHE = {
     "cache_duration": 300,  # 5 minutes
 }
 
+
+def _set_active_session_language(lang_code: str) -> None:
+    """Ensure the current request session reflects the selected language."""
+
+    # Update thread-local language used by Frappe during the request
+    try:
+        frappe.local.lang = lang_code
+    except Exception:
+        pass
+
+    # Update session dictionaries so subsequent requests use the new language
+    for session_obj in (
+        getattr(frappe.local, "session", None),
+        getattr(frappe.session, "data", None),
+    ):
+        if not session_obj:
+            continue
+        try:
+            session_obj["lang"] = lang_code
+            session_obj["language"] = lang_code
+        except Exception:
+            pass
+
+    # Some code paths read frappe.session.lang directly
+    try:
+        frappe.session.lang = lang_code
+    except Exception:
+        pass
+
+    # Keep boot info in sync so the UI gets the updated language immediately
+    boot = getattr(frappe.local, "boot", None)
+    if boot:
+        boot.lang = lang_code
+        sysdefaults = boot.get("sysdefaults")
+        if isinstance(sysdefaults, dict):
+            sysdefaults["language"] = lang_code
+
+    # Update preferred language cookie when available
+    cookie_manager = getattr(frappe.local, "cookie_manager", None)
+    if cookie_manager:
+        try:
+            cookie_manager.set_cookie("preferred_language", lang_code)
+        except Exception:
+            pass
+
+
+# Language display names mapping (moved to module level for reuse)
 # Language display names mapping (moved to module level for reuse)
 LANGUAGE_NAMES = {
     "en": "English",
@@ -441,7 +697,83 @@ LANGUAGE_NAMES = {
     "et": "Eesti",
     "lv": "Latviešu",
     "lt": "Lietuvių",
+    "af": "Afrikaans",
+    "am": "አማርኛ",
+    "bn": "বাংলা",
+    "bo": "བོད་སྐད",
+    "bs": "Bosanski",
+    "ca": "Català",
+    "el": "Ελληνικά",
+    "en-GB": "English (UK)",
+    "en-US": "English (US)",
+    "eo": "Esperanto",
+    "es-AR": "Español (Argentina)",
+    "es-BO": "Español (Bolivia)",
+    "es-CL": "Español (Chile)",
+    "es-CO": "Español (Colombia)",
+    "es-DO": "Español (República Dominicana)",
+    "es-EC": "Español (Ecuador)",
+    "es-GT": "Español (Guatemala)",
+    "es-MX": "Español (México)",
+    "es-NI": "Español (Nicaragua)",
+    "es-PE": "Español (Perú)",
+    "fa": "فارسی",
+    "fil": "Filipino",
+    "gu": "ગુજરાતી",
+    "he": "עברית",
+    "id": "Bahasa Indonesia",
+    "is": "Íslenska",
+    "km": "ភាសាខ្មែរ",
+    "kn": "ಕನ್ನಡ",
+    "ku": "Kurdî",
+    "lo": "ລາວ",
+    "mk": "Македонски",
+    "ml": "മലയാളം",
+    "mn": "Монгол",
+    "mr": "मराठी",
+    "ms": "Bahasa Melayu",
+    "my": "မြန်မာဘာသာ",
+    "nb": "Norsk Bokmål",
+    "ps": "پښتو",
+    "pt-BR": "Português (Brasil)",
+    "rw": "Kinyarwanda",
+    "si": "සිංහල",
+    "sq": "Shqip",
+    "sr": "Српски",
+    "sr-CS": "Srpski",
+    "sw": "Kiswahili",
+    "ta": "தமிழ்",
+    "te": "తెలుగు",
+    "th": "ไทย",
+    "uk": "Українська",
+    "ur": "اردو",
+    "uz": "Oʻzbek",
+    "vi": "Tiếng Việt",
+    "zh-TW": "中文 (台灣)",
 }
+
+
+def _clip_text(value: Any, max_length: int = 2000) -> str:
+    text = cstr(value or "")
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + "..."
+
+
+def _sanitize_client_error_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "kind": _clip_text(payload.get("kind") or "unknown", 80),
+        "message": _clip_text(payload.get("message") or "Unknown client error", 2000),
+        "stack": _clip_text(payload.get("stack") or "", 8000),
+        "filename": _clip_text(payload.get("filename") or "", 500),
+        "lineno": payload.get("lineno"),
+        "colno": payload.get("colno"),
+        "info": _clip_text(payload.get("info") or "", 1000),
+        "route": _clip_text(payload.get("route") or "", 500),
+        "url": _clip_text(payload.get("url") or "", 1000),
+        "user_agent": _clip_text(payload.get("userAgent") or "", 500),
+        "timestamp": _clip_text(payload.get("timestamp") or "", 80),
+    }
 
 
 def _is_cache_valid():
@@ -488,9 +820,7 @@ def get_available_languages():
 
         # Always include English as fallback
         if not any(lang["code"] == "en" for lang in languages):
-            languages.insert(
-                0, {"code": "en", "name": "English", "native_name": "English"}
-            )
+            languages.insert(0, {"code": "en", "name": "English", "native_name": "English"})
 
         # Sort and cache
         languages = sorted(languages, key=lambda x: x["code"])
@@ -526,6 +856,7 @@ def get_current_user_language():
             }
 
         user_language = _get_user_language_cached(user)
+        _set_active_session_language(user_language)
         available_languages = get_available_languages()
 
         # Find current language details
@@ -538,9 +869,7 @@ def get_current_user_language():
             "success": True,
             "user": user,
             "language_code": user_language,
-            "language_name": (
-                current_lang["name"] if current_lang else user_language.upper()
-            ),
+            "language_name": (current_lang["name"] if current_lang else user_language.upper()),
             "available_languages": available_languages,
         }
 
@@ -577,6 +906,7 @@ def set_current_user_language(lang_code):
         # Clear specific caches
         frappe.clear_cache(user=user)
         _get_user_language_cached.cache_clear()
+        _set_active_session_language(lang_code)
 
         return {
             "success": True,
@@ -598,14 +928,10 @@ def get_language_info(lang_code):
             return {"success": False, "message": error_msg}
 
         available_languages = get_available_languages()
-        language = next(
-            (lang for lang in available_languages if lang["code"] == lang_code), None
-        )
+        language = next((lang for lang in available_languages if lang["code"] == lang_code), None)
 
         # Check translation file
-        translations_path = frappe.get_app_path(
-            "posawesome", "translations", f"{lang_code}.csv"
-        )
+        translations_path = frappe.get_app_path("posawesome", "translations", f"{lang_code}.csv")
         has_translations = os.path.exists(translations_path)
 
         translation_count = 0
@@ -626,3 +952,32 @@ def get_language_info(lang_code):
     except Exception as e:
         frappe.log_error(f"Error getting language info for {lang_code}: {str(e)}")
         return {"success": False, "message": "Failed to get language info"}
+
+
+@frappe.whitelist()
+def log_client_error(payload=None):
+    """Capture frontend runtime errors in server logs for debugging."""
+    try:
+        if isinstance(payload, str):
+            parsed_payload = json.loads(payload)
+        elif isinstance(payload, dict):
+            parsed_payload = payload
+        else:
+            parsed_payload = {"message": _clip_text(payload)}
+
+        sanitized_payload = _sanitize_client_error_payload(parsed_payload)
+        title = f"POS Client Error [{sanitized_payload.get('kind', 'unknown')}]"
+        message = {
+            "user": frappe.session.user,
+            "site": frappe.local.site,
+            "payload": sanitized_payload,
+        }
+
+        frappe.log_error(message=json.dumps(message, ensure_ascii=True, default=str), title=title)
+        return {"ok": True}
+    except Exception as exc:
+        frappe.log_error(
+            message=f"Failed to log POS client error: {cstr(exc)}\n{frappe.get_traceback()}",
+            title="POS Client Error Logging Failure",
+        )
+        return {"ok": False}
