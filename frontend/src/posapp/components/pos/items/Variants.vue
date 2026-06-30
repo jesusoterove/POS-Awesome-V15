@@ -82,19 +82,12 @@
 </template>
 
 <script>
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/Variants.vue
-/* global frappe */
-import { ensurePosProfile } from "../../../utils/pos_profile.js";
-import _ from "lodash";
-import placeholderImage from "./placeholder-image.png";
-========
 import { ensurePosProfile } from "../../../../utils/pos_profile";
 import _ from "lodash";
 import placeholderImage from "../placeholder-image.png";
 import { getCurrentInstance } from "vue";
 import { useUIStore } from "../../../stores/uiStore.js";
 import { useInvoiceStore } from "../../../stores/invoiceStore.js";
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/items/Variants.vue
 export default {
 	setup() {
 		const { proxy } = getCurrentInstance();
@@ -125,8 +118,6 @@ export default {
 		displayItems() {
 			return this.filterdItems.slice(0, this.displayCount);
 		},
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/Variants.vue
-========
 		dialogVisible: {
 			get() {
 				return this.uiStore.variantsDialog;
@@ -135,7 +126,6 @@ export default {
 				if (!val) this.uiStore.closeVariants();
 			},
 		},
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/items/Variants.vue
 	},
 
 	watch: {
@@ -172,8 +162,6 @@ export default {
 				this.updateFiltredItems();
 			},
 			deep: true,
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/Variants.vue
-========
 		},
 		// Watch for new data from store
 		"uiStore.variantsData": {
@@ -214,7 +202,6 @@ export default {
 				});
 			},
 			deep: true,
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/items/Variants.vue
 		},
 	},
 
@@ -266,10 +253,6 @@ export default {
 					this.attributes_meta = res.message.attributes_meta || this.attributes_meta;
 					const existingCodes = new Set((this.items || []).map((it) => it.item_code));
 					const newItems = variants.filter((it) => !existingCodes.has(it.item_code));
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/Variants.vue
-					console.log("new variant items", newItems);
-========
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/items/Variants.vue
 					await Promise.all(newItems.map((it) => this.fetchVariantRate(it)));
 					this.items = (this.items || []).concat(newItems);
 				}
@@ -322,13 +305,6 @@ export default {
 						}
 					});
 				}
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/Variants.vue
-				console.log(
-					"filtered items",
-					this.filterdItems.map((it) => it.item_code),
-				);
-========
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/items/Variants.vue
 				this.displayCount = 100;
 			});
 		}, 200),
@@ -406,43 +382,8 @@ export default {
 		},
 	},
 
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/Variants.vue
-	created: function () {
-		this.eventBus.on("open_variants_model", async (item, items, profile, attrsMeta) => {
-			console.log("open_variants_model", { item, items, profile, attrsMeta });
-			this.varaintsDialog = true;
-			this.parentItem = item || null;
-			this.items = Array.isArray(items) ? items : [];
-			this.filters = {};
-			this.attributes_meta = attrsMeta || this.attributes_meta;
-			if (
-				!this.parentItem.attributes &&
-				this.attributes_meta &&
-				Object.keys(this.attributes_meta).length
-			) {
-				this.parentItem.attributes = Object.keys(this.attributes_meta).map((attr) => ({
-					attribute: attr,
-					values: this.attributes_meta[attr].map((v) => ({ attribute_value: v, abbr: v })),
-				}));
-			}
-			if (profile) {
-				this.pos_profile = profile;
-			} else {
-				this.pos_profile = await ensurePosProfile();
-			}
-			if (!this.items || this.items.length === 0) {
-				const parentCode = item.item_code || item.code || item.name;
-				await this.fetchVariants(parentCode, this.pos_profile);
-			}
-			this.$nextTick(() => {
-				this.filterdItems = this.variantsItems;
-				this.displayCount = 100;
-			});
-		});
-========
 	created() {
 		// Event listeners removed - using store watchers
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/items/Variants.vue
 	},
 	beforeUnmount() {
 		// Cleanup if needed

@@ -13,11 +13,7 @@
 						variant="outlined"
 						color="primary"
 						:label="frappe._('Coupon')"
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/PosCoupons.vue
-						:bg-color="isDarkTheme ? '#1E1E1E' : 'white'"
-========
 						class="pos-themed-input coupon-input"
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/offers/PosCoupons.vue
 						hide-details
 						v-model="new_coupon"
 						@keydown.enter="add_coupon(new_coupon)"
@@ -78,16 +74,12 @@
 </template>
 
 <script>
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/PosCoupons.vue
-/* global __, frappe */
-========
 import { useCustomersStore } from "../../../stores/customersStore.js";
 import { useToastStore } from "../../../stores/toastStore.js";
 import { useUIStore } from "../../../stores/uiStore.js";
 import { storeToRefs } from "pinia";
 import { getCachedCoupons, saveCoupons } from "../../../../offline/index";
 
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/offers/PosCoupons.vue
 export default {
 	setup() {
 		const customersStore = useCustomersStore();
@@ -165,11 +157,7 @@ export default {
 					if (r.message) {
 						const res = r.message;
 						if (res.msg != "Apply" || !res.coupon) {
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/PosCoupons.vue
-							vm.eventBus.emit("show_message", {
-========
 							vm.toastStore.show({
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/offers/PosCoupons.vue
 								title: res.msg,
 								color: "error",
 							});

@@ -697,33 +697,6 @@ export default {
 			const saved = localStorage.getItem("posawesome_hide_non_essential_fields");
 			if (saved !== null) {
 				this.hideNonEssential = JSON.parse(saved);
-<<<<<<<< HEAD:frontend/src/posapp/components/pos/UpdateCustomer.vue
-			}
-		}
-		this.eventBus.on("open_update_customer", (data) => {
-			this.customerDialog = true;
-
-			if (data) {
-				this.customer_name = data.customer_name;
-				this.customer_id = data.name;
-				this.address_line1 = data.address_line1 || "";
-				this.city = data.city || "";
-				this.country =
-					data.country || (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
-				this.tax_id = data.tax_id;
-				this.mobile_no = data.mobile_no;
-				this.email_id = data.email_id;
-				this.referral_code = data.referral_code;
-				this.birthday = data.birthday;
-				this.group = data.customer_group;
-				this.territory = data.territory;
-				this.loyalty_points = data.loyalty_points;
-				this.loyalty_program = data.loyalty_program;
-				this.gender = data.gender;
-			} else {
-				this.country = (this.pos_profile && this.pos_profile.posa_default_country) || "Pakistan";
-========
->>>>>>>> 3dbdf78f333ba6f737003312271be25bc36336a5:frontend/src/posapp/components/pos/dialogs/customer/UpdateCustomer.vue
 			}
 		}
 		// Watch store state for dialog opening
