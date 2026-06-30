@@ -1,9 +1,5 @@
 <template>
-	<div
-		class="pos-main-container dynamic-container"
-		:class="rtlClasses"
-		:style="[responsiveStyles, rtlStyles]"
-	>
+	<div class="pos-main-container dynamic-container" :class="rtlClasses" :style="[responsiveStyles, rtlStyles]">
 		<ClosingDialog></ClosingDialog>
 		<Drafts></Drafts>
 		<SalesOrders></SalesOrders>
@@ -13,15 +9,8 @@
 		<Variants></Variants>
 		<OpeningDialog v-if="dialog" :dialog="dialog"></OpeningDialog>
 		<v-row v-show="!dialog" dense class="ma-0 dynamic-main-row">
-			<v-col
-				v-show="!payment && !showOffers && !coupons"
-				xl="5"
-				lg="5"
-				md="5"
-				sm="5"
-				cols="12"
-				class="pos dynamic-col"
-			>
+			<v-col v-show="!payment && !showOffers && !coupons" xl="5" lg="5" md="5" sm="5" cols="12"
+				class="pos dynamic-col">
 				<ItemsSelector></ItemsSelector>
 			</v-col>
 			<v-col v-show="showOffers" xl="5" lg="5" md="5" sm="5" cols="12" class="pos dynamic-col">
@@ -70,8 +59,6 @@ import { useOffers } from "../../composables/useOffers.js";
 import { clearExpiredCustomerBalances } from "../../../offline/index.js";
 import { useResponsive } from "../../composables/useResponsive.js";
 import { useRtl } from "../../composables/useRtl.js";
-import { useCustomersStore } from "../../stores/customersStore.js";
-import { storeToRefs } from "pinia";
 
 export default {
 	setup() {
@@ -178,6 +165,10 @@ export default {
 				this.itemsLoaded = true;
 				this.checkLoadingComplete();
 			});
+			this.eventBus.on("customers_loaded", () => {
+				this.customersLoaded = true;
+				this.checkLoadingComplete();
+			});
 		});
 	},
 	beforeUnmount() {
@@ -190,23 +181,12 @@ export default {
 		this.eventBus.off("open_closing_dialog");
 		this.eventBus.off("submit_closing_pos");
 		this.eventBus.off("items_loaded");
+		this.eventBus.off("customers_loaded");
 	},
 	// In the created() or mounted() lifecycle hook
 	created() {
 		// Clean up expired customer balance cache on POS load
 		clearExpiredCustomerBalances();
-		const customersStore = useCustomersStore();
-		const { customersLoaded } = storeToRefs(customersStore);
-		this.$watch(
-			() => customersLoaded.value,
-			(value) => {
-				if (value) {
-					this.customersLoaded = true;
-					this.checkLoadingComplete();
-				}
-			},
-			{ immediate: true },
-		);
 	},
 };
 </script>

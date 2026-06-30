@@ -4,8 +4,6 @@
 import json
 
 import frappe
-from erpnext.accounts.party import get_party_account
-from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
 from frappe.utils import getdate, nowdate
 
 from posawesome.posawesome.api.payment_entry import create_payment_entry
@@ -46,24 +44,41 @@ def _map_delivery_dates(data):
     def parse_date(value):
         if not value:
             return None
+        if isinstance(value, str):
+            normalized = value.strip()
+            if not normalized:
+                return None
+            if normalized.lower() in {"invalid date", "nan", "none", "null", "undefined"}:
+                return None
+            value = normalized
         try:
             return str(getdate(value))
         except Exception:
             return None
 
-    # Map order level delivery date
-    if not data.get("delivery_date") and data.get("posa_delivery_date"):
-        parsed = parse_date(data.get("posa_delivery_date"))
-        if parsed:
-            data["delivery_date"] = parsed
+    # Map order level delivery date with robust fallback.
+    order_delivery_date = (
+        parse_date(data.get("delivery_date"))
+        or parse_date(data.get("posa_delivery_date"))
+        or parse_date(data.get("transaction_date"))
+        or parse_date(data.get("posting_date"))
+        or str(getdate(nowdate()))
+    )
+    data["delivery_date"] = order_delivery_date
 
     # Map item level delivery dates
     for item in data.get("items", []):
-        if not item.get("delivery_date"):
-            delivery = item.get("posa_delivery_date") or data.get("delivery_date")
-            parsed = parse_date(delivery)
-            if parsed:
-                item["delivery_date"] = parsed
+        if not isinstance(item, dict):
+            continue
+
+        item_delivery = (
+            parse_date(item.get("delivery_date"))
+            or parse_date(item.get("posa_delivery_date"))
+            or order_delivery_date
+        )
+        if item_delivery:
+            item["delivery_date"] = item_delivery
+            item.setdefault("posa_delivery_date", item_delivery)
 
 
 @frappe.whitelist()

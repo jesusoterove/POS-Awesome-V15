@@ -418,68 +418,6 @@ body {
 	transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
 }
 
-/* ===== PROGRESS LINEAR BAR FIXES ===== */
-/* Fix for absolute positioned progress bars */
-.v-progress-linear--absolute {
-	position: absolute !important;
-	z-index: 10 !important;
-	width: 100% !important;
-}
-
-/* Ensure parent containers support absolute positioning */
-.v-card:has(.v-progress-linear--absolute),
-.v-app-bar:has(.v-progress-linear--absolute) {
-	position: relative !important;
-}
-
-/* Fallback for browsers that don't support :has() selector */
-.v-card,
-.v-app-bar {
-	position: relative;
-}
-
-/* Specific classes for components with progress bars */
-.selection.v-card,
-.navbar-enhanced.v-app-bar {
-	position: relative !important;
-}
-
-/* Fix theme conflicts */
-.v-progress-linear.v-theme--light {
-	background-color: rgba(0, 0, 0, 0.08) !important;
-}
-
-.v-progress-linear.v-theme--light .v-progress-linear__determinate,
-.v-progress-linear.v-theme--light .v-progress-linear__indeterminate {
-	background-color: var(--v-theme-primary, #1976d2) !important;
-}
-
-/* Ensure progress bars don't interfere with content */
-.v-progress-linear--absolute+.v-overlay {
-	z-index: 11 !important;
-}
-
-/* Enhanced progress bar for smooth experience */
-.v-progress-linear__determinate {
-	transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-}
-
-/* Global progress bar enhancements */
-.v-progress-linear {
-	border-radius: 0 !important;
-}
-
-.v-progress-linear--absolute {
-	box-shadow: none !important;
-}
-
-/* Smooth transitions for all progress elements */
-.v-progress-linear * {
-	transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-}
-
-
-
 /* ===== COMMON CARD STYLES ===== */
 .pos-card {
 	border-radius: var(--border-radius-lg);

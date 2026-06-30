@@ -1,74 +1,39 @@
 import { nextTick } from "vue";
 import _ from "lodash";
 import { useBundles } from "./useBundles.js";
-import { withPerf } from "../utils/perf.js";
 
 /* global frappe, __ */
 
 export function useItemAddition() {
-	const runAsyncTask = (task, contextLabel) => {
-		Promise.resolve().then(() => {
-			try {
-				const result = typeof task === "function" ? task() : null;
-				if (result && typeof result.then === "function") {
-					result.catch((error) => {
-						console.error(`Async task failed${contextLabel ? ` (${contextLabel})` : ""}:`, error);
-					});
-				}
-			} catch (error) {
-				console.error(
-					`Async task threw synchronously${contextLabel ? ` (${contextLabel})` : ""}:`,
-					error,
-				);
-			}
-		});
-	};
-
-	const scheduleItemTask = (context, item, taskName, task, contextLabel) => {
-		runAsyncTask(() => {
-			if (item?.posa_row_id && typeof context?.getItemTaskPromise === "function") {
-				const existing = context.getItemTaskPromise(item.posa_row_id, taskName);
-				if (existing) {
-					return existing;
-				}
-			}
-			return typeof task === "function" ? task() : null;
-		}, contextLabel);
-	};
-
 	// Remove item from invoice
-	const removeItem = (item, context) => {
-		const index = context.items.findIndex((el) => el.posa_row_id == item.posa_row_id);
-		if (index >= 0) {
-			context.items.splice(index, 1);
-		}
-		if (item.is_bundle) {
-			context.packed_items = context.packed_items.filter((it) => it.bundle_id !== item.bundle_id);
-		}
-		// Remove from expanded if present
-		context.expanded = context.expanded.filter((id) => id !== item.posa_row_id);
-		if (item?.posa_row_id && typeof context?.resetItemTaskCache === "function") {
-			context.resetItemTaskCache(item.posa_row_id);
-		}
-	};
+        const removeItem = (item, context) => {
+                const index = context.items.findIndex((el) => el.posa_row_id == item.posa_row_id);
+                if (index >= 0) {
+                        context.items.splice(index, 1);
+                }
+                if (item.is_bundle) {
+                        context.packed_items = context.packed_items.filter((it) => it.bundle_id !== item.bundle_id);
+                }
+                // Remove from expanded if present
+                context.expanded = context.expanded.filter((id) => id !== item.posa_row_id);
+        };
 
 	const { getBundleComponents } = useBundles();
 
-	const expandBundle = async (parent, context) => {
-		const components = await getBundleComponents(parent.item_code);
-		if (!components || !components.length) {
-			return;
-		}
-		parent.is_bundle = 1;
-		parent.is_bundle_parent = 1;
-		parent.is_stock_item = 0;
-		parent.warehouse = null;
-		parent.stock_qty = 0;
-		parent.bundle_id = context.makeid ? context.makeid(10) : Math.random().toString(36).substr(2, 10);
-		// Force reactivity so the bundle badge appears immediately
-		context.items = [...context.items];
+        const expandBundle = async (parent, context) => {
+                const components = await getBundleComponents(parent.item_code);
+                if (!components || !components.length) {
+                        return;
+                }
+                parent.is_bundle = 1;
+                parent.is_bundle_parent = 1;
+                parent.is_stock_item = 0;
+                parent.warehouse = null;
+                parent.stock_qty = 0;
+                parent.bundle_id = context.makeid ? context.makeid(10) : Math.random().toString(36).substr(2, 10);
+                // Force reactivity so the bundle badge appears immediately
+                context.items = [...context.items];
                 for (const comp of components) {
-                        const isStockItem = comp.is_stock_item ?? 1;
                         const child = {
                                 parent_item: parent.item_code,
                                 bundle_id: parent.bundle_id,
@@ -80,64 +45,40 @@ export function useItemAddition() {
                                 rate: 0,
                                 child_qty_per_bundle: comp.qty,
                                 warehouse: context.pos_profile.warehouse,
-                                is_stock_item: isStockItem ? 1 : 0,
+                                is_stock_item: 1,
                                 has_batch_no: comp.is_batch,
                                 has_serial_no: comp.is_serial,
                                 posa_row_id: context.makeid ? context.makeid(20) : Math.random().toString(36).substr(2, 20),
                                 posa_offers: JSON.stringify([]),
                                 posa_offer_applied: 0,
-				posa_is_offer: 0,
-			};
-			context.packed_items.push(child);
+                                posa_is_offer: 0,
+                        };
+                        context.packed_items.push(child);
                         if (context.update_item_detail) {
-                                scheduleItemTask(
-                                        context,
-                                        child,
-                                        "update_item_detail",
-                                        () => context.update_item_detail(child, false),
-                                        "update_item_detail:bundle_child",
-                                );
+                                context.update_item_detail(child, false);
                                 context.calc_stock_qty && context.calc_stock_qty(child, child.qty);
                         }
-                        if (context.fetch_available_qty && isStockItem) {
-                                scheduleItemTask(
-                                        context,
-                                        child,
-                                        "fetch_available_qty",
-                                        () => context.fetch_available_qty(child),
-					"fetch_available_qty:bundle_child",
-				);
-			}
-		}
-	};
-
-	const moveItemToTop = (context, target) => {
-		if (!target) return;
-		const currentIndex = context.items.findIndex((item) => item.posa_row_id === target.posa_row_id);
-		if (currentIndex > 0) {
-			const [existing] = context.items.splice(currentIndex, 1);
-			context.items.unshift(existing);
-		}
-	};
+                        if (context.fetch_available_qty) {
+                                context.fetch_available_qty(child);
+                        }
+                }
+        };
 
 	// Add item to invoice
-	const addItem = withPerf("pos:add-item", async function addItemMeasured(item, context) {
+	const addItem = async (item, context) => {
 		if (!item.uom) {
 			item.uom = item.stock_uom;
 		}
 		let index = -1;
 		if (!context.new_line) {
-			// For normal additions (not returns), only merge with existing positive quantity lines
-			// This ensures that negative quantities (returns) are kept separate from positive sales
+			// For auto_set_batch enabled, we should check if the item code and UOM match only
 			if (context.pos_profile.posa_auto_set_batch && item.has_batch_no) {
 				index = context.items.findIndex(
 					(el) =>
 						el.item_code === item.item_code &&
 						el.uom === item.uom &&
 						!el.posa_is_offer &&
-						!el.posa_is_replace &&
-						// Only merge with positive quantity lines for normal additions
-						el.qty > 0,
+						!el.posa_is_replace,
 				);
 			} else {
 				index = context.items.findIndex(
@@ -147,9 +88,7 @@ export function useItemAddition() {
 						!el.posa_is_offer &&
 						!el.posa_is_replace &&
 						((el.batch_no && item.batch_no && el.batch_no === item.batch_no) ||
-							(!el.batch_no && !item.batch_no)) &&
-						// Only merge with positive quantity lines for normal additions
-						el.qty > 0,
+							(!el.batch_no && !item.batch_no)),
 				);
 			}
 		}
@@ -175,32 +114,56 @@ export function useItemAddition() {
 				new_item.qty = -Math.abs(new_item.qty || 1);
 			}
 			// Apply UOM conversion immediately if barcode specifies a different UOM
-			if (
-				context.calc_uom &&
-				new_item.uom &&
-				(!new_item.stock_uom || new_item.uom !== new_item.stock_uom)
-			) {
-				scheduleItemTask(
-					context,
-					new_item,
-					"calc_uom",
-					() => context.calc_uom(new_item, new_item.uom),
-					"calc_uom:new_item",
-				);
+			if (context.calc_uom && new_item.uom) {
+				await context.calc_uom(new_item, new_item.uom);
 			}
 
-			// Re-check in case other async updates modified the cart meanwhile
+			// Attempt to fetch an explicit rate for this UOM from the active price list
+			try {
+				const r = await frappe.call({
+					method: "posawesome.posawesome.api.items.get_price_for_uom",
+					args: {
+						item_code: new_item.item_code,
+						price_list: context.get_price_list ? context.get_price_list() : null,
+						uom: new_item.uom,
+					},
+				});
+				if (r.message) {
+					const price = parseFloat(r.message);
+					const baseCurrency = context.price_list_currency || context.pos_profile.currency;
+
+					// Convert price to selected currency when multi-currency is enabled
+					let converted_price = price;
+					if (
+						context.pos_profile.posa_allow_multi_currency &&
+						context.selected_currency &&
+						context.selected_currency !== baseCurrency
+					) {
+						converted_price = price * (context.exchange_rate || 1);
+					}
+
+					Object.assign(new_item, {
+						rate: converted_price,
+						price_list_rate: converted_price,
+						base_rate: price,
+						base_price_list_rate: price,
+						_manual_rate_set: true,
+						skip_force_update: true,
+					});
+				}
+			} catch (e) {
+				console.warn("UOM price fetch failed", e);
+			}
+
+			// Check again in case the item was added while awaiting price fetch
 			if (!context.new_line) {
-				// Apply same logic - only merge with positive quantity lines for normal additions
 				if (context.pos_profile.posa_auto_set_batch && item.has_batch_no) {
 					index = context.items.findIndex(
 						(el) =>
 							el.item_code === item.item_code &&
 							el.uom === item.uom &&
 							!el.posa_is_offer &&
-							!el.posa_is_replace &&
-							// Only merge with positive quantity lines for normal additions
-							el.qty > 0,
+							!el.posa_is_replace,
 					);
 				} else {
 					index = context.items.findIndex(
@@ -210,35 +173,19 @@ export function useItemAddition() {
 							!el.posa_is_offer &&
 							!el.posa_is_replace &&
 							((el.batch_no && item.batch_no && el.batch_no === item.batch_no) ||
-								(!el.batch_no && !item.batch_no)) &&
-							// Only merge with positive quantity lines for normal additions
-							el.qty > 0,
+								(!el.batch_no && !item.batch_no)),
 					);
 				}
 			}
 
 			if (index === -1 || context.new_line) {
-				context.items.unshift(new_item);
-				runAsyncTask(() => expandBundle(new_item, context), "expand_bundle");
-				// Skip recalculation to preserve the manually set rate
-				if (context.update_item_detail) {
-					scheduleItemTask(
-						context,
-						new_item,
-						"update_item_detail",
-						() => context.update_item_detail(new_item, false),
-						"update_item_detail:new",
-					);
-				}
+                                context.items.unshift(new_item);
+                                await expandBundle(new_item, context);
+                                // Skip recalculation to preserve the manually set rate
+                                if (context.update_item_detail) context.update_item_detail(new_item, false);
 
 				if (context.fetch_available_qty) {
-					scheduleItemTask(
-						context,
-						new_item,
-						"fetch_available_qty",
-						() => context.fetch_available_qty(new_item),
-						"fetch_available_qty:new",
-					);
+					context.fetch_available_qty(new_item);
 				}
 
 				if (
@@ -292,13 +239,7 @@ export function useItemAddition() {
 				}
 			} else {
 				const cur_item = context.items[index];
-				const previousQty = cur_item.qty;
-				if (context.update_items_details) {
-					runAsyncTask(
-						() => context.update_items_details([cur_item]),
-						"update_items_details:merge_new",
-					);
-				}
+				if (context.update_items_details) context.update_items_details([cur_item]);
 				// Merge serial numbers if any
 				if (new_item.serial_no_selected && new_item.serial_no_selected.length) {
 					new_item.serial_no_selected.forEach((sn) => {
@@ -320,39 +261,17 @@ export function useItemAddition() {
 
 				if (context.setSerialNo) context.setSerialNo(cur_item);
 
-				if (
-					context.calc_uom &&
-					cur_item.uom &&
-					(!cur_item.stock_uom || cur_item.uom !== cur_item.stock_uom)
-				) {
-					scheduleItemTask(
-						context,
-						cur_item,
-						"calc_uom",
-						() => context.calc_uom(cur_item, cur_item.uom),
-						"calc_uom:merge_new_item",
-					);
+				if (context.calc_uom && cur_item.uom) {
+					await context.calc_uom(cur_item, cur_item.uom);
 				}
 
 				if (context.fetch_available_qty) {
-					scheduleItemTask(
-						context,
-						cur_item,
-						"fetch_available_qty",
-						() => context.fetch_available_qty(cur_item),
-						"fetch_available_qty:merge_new",
-					);
-				}
-				if (cur_item.qty > previousQty) {
-					moveItemToTop(context, cur_item);
+					context.fetch_available_qty(cur_item);
 				}
 			}
 		} else {
 			const cur_item = context.items[index];
-			const previousQty = cur_item.qty;
-			if (context.update_items_details) {
-				runAsyncTask(() => context.update_items_details([cur_item]), "update_items_details:existing");
-			}
+			if (context.update_items_details) context.update_items_details([cur_item]);
 			// Serial number logic for existing item
 			if (item.has_serial_no && item.to_set_serial_no) {
 				if (cur_item.serial_no_selected.includes(item.to_set_serial_no)) {
@@ -383,36 +302,15 @@ export function useItemAddition() {
 			if (context.setSerialNo) context.setSerialNo(cur_item);
 
 			// Recalculate rates if UOM differs from stock UOM
-			if (
-				context.calc_uom &&
-				cur_item.uom &&
-				(!cur_item.stock_uom || cur_item.uom !== cur_item.stock_uom)
-			) {
-				scheduleItemTask(
-					context,
-					cur_item,
-					"calc_uom",
-					() => context.calc_uom(cur_item, cur_item.uom),
-					"calc_uom:merge_existing",
-				);
+			if (context.calc_uom && cur_item.uom) {
+				await context.calc_uom(cur_item, cur_item.uom);
 			}
 
 			if (context.fetch_available_qty) {
-				scheduleItemTask(
-					context,
-					cur_item,
-					"fetch_available_qty",
-					() => context.fetch_available_qty(cur_item),
-					"fetch_available_qty:existing",
-				);
-			}
-			if (cur_item.qty > previousQty) {
-				moveItemToTop(context, cur_item);
+				context.fetch_available_qty(cur_item);
 			}
 		}
-		if (context.forceUpdate) {
-			runAsyncTask(() => context.forceUpdate(), "force_update");
-		}
+		if (context.forceUpdate) context.forceUpdate();
 
 		// Only try to expand if new_item exists and should be expanded
 		if (
@@ -421,26 +319,18 @@ export function useItemAddition() {
 		) {
 			context.expanded = [new_item.posa_row_id];
 		}
-	});
+	};
 
 	// Create a new item object with default and calculated fields
 	const getNewItem = (item, context) => {
 		const new_item = { ...item };
 		new_item.original_item_name = new_item.item_name;
 		new_item.name_overridden = 0;
-		// Mark server detail state so invoice can avoid redundant refreshes
-		new_item._detailSynced = false;
-		new_item._detailInFlight = false;
 		if (!new_item.warehouse) {
 			new_item.warehouse = context.pos_profile.warehouse;
 		}
 		if (!item.qty) {
 			item.qty = 1;
-		}
-
-		// Ensure normal additions are always positive (unless it's a return invoice)
-		if (!context.isReturnInvoice && item.qty < 0) {
-			item.qty = Math.abs(item.qty);
 		}
 		if (!item.posa_is_offer) {
 			item.posa_is_offer = 0;
@@ -461,24 +351,19 @@ export function useItemAddition() {
 		new_item.discount_amount = 0;
 		new_item.discount_percentage = 0;
 		new_item.discount_amount_per_item = 0;
-		new_item.price_list_rate = item.price_list_rate ?? item.rate ?? 0;
+		new_item.price_list_rate = item.rate;
 
 		// Setup base rates properly for multi-currency
 		const baseCurrency = context.price_list_currency || context.pos_profile.currency;
 		if (context.selected_currency !== baseCurrency) {
 			// Store original base currency values
-			new_item.base_price_list_rate =
-				item.base_price_list_rate !== undefined
-					? item.base_price_list_rate
-					: item.rate / context.exchange_rate;
-			new_item.base_rate =
-				item.base_rate !== undefined ? item.base_rate : item.rate / context.exchange_rate;
+			new_item.base_price_list_rate = item.rate / context.exchange_rate;
+			new_item.base_rate = item.rate / context.exchange_rate;
 			new_item.base_discount_amount = 0;
 		} else {
 			// In base currency, base rates = displayed rates
-			new_item.base_price_list_rate =
-				item.base_price_list_rate !== undefined ? item.base_price_list_rate : item.rate;
-			new_item.base_rate = item.base_rate !== undefined ? item.base_rate : item.rate;
+			new_item.base_price_list_rate = item.rate;
+			new_item.base_rate = item.rate;
 			new_item.base_discount_amount = 0;
 		}
 
@@ -494,15 +379,15 @@ export function useItemAddition() {
 		new_item.conversion_factor = 1;
 		new_item.posa_offers = JSON.stringify([]);
 		new_item.posa_offer_applied = 0;
-		new_item.posa_is_offer = item.posa_is_offer;
-		new_item.posa_is_replace = item.posa_is_replace || null;
-		new_item.is_free_item = 0;
-		new_item.is_bundle = 0;
-		new_item.is_bundle_parent = 0;
-		new_item.bundle_id = null;
-		new_item.posa_notes = "";
-		new_item.posa_delivery_date = "";
-		new_item.posa_row_id = context.makeid ? context.makeid(20) : Math.random().toString(36).substr(2, 20);
+                new_item.posa_is_offer = item.posa_is_offer;
+                new_item.posa_is_replace = item.posa_is_replace || null;
+                new_item.is_free_item = 0;
+                new_item.is_bundle = 0;
+                new_item.is_bundle_parent = 0;
+                new_item.bundle_id = null;
+                new_item.posa_notes = "";
+                new_item.posa_delivery_date = "";
+                new_item.posa_row_id = context.makeid ? context.makeid(20) : Math.random().toString(36).substr(2, 20);
 		if (new_item.has_serial_no && !new_item.serial_no_selected) {
 			new_item.serial_no_selected = [];
 			new_item.serial_no_selected_count = 0;
@@ -517,8 +402,8 @@ export function useItemAddition() {
 
 	// Reset all invoice fields to default/empty values
 	const clearInvoice = (context) => {
-		context.items = [];
-		context.packed_items = [];
+                context.items = [];
+                context.packed_items = [];
 		context.posa_offers = [];
 		context.expanded = [];
 		context.eventBus.emit("set_pos_coupons", []);
@@ -541,24 +426,7 @@ export function useItemAddition() {
 
 		context.eventBus.emit("set_customer_readonly", false);
 		context.invoiceType = context.pos_profile.posa_default_sales_order ? "Order" : "Invoice";
-		context.invoiceTypes = ["Invoice", "Order", "Quotation"];
-
-		if (Object.prototype.hasOwnProperty.call(context, "itemSearch")) {
-			context.itemSearch = "";
-		}
-
-		if (typeof context.resetItemTaskCache === "function") {
-			context.resetItemTaskCache(null);
-		}
-		if (typeof context.clearItemDetailCache === "function") {
-			context.clearItemDetailCache();
-		}
-		if (typeof context.clearItemStockCache === "function") {
-			context.clearItemStockCache();
-		}
-		if (context.available_stock_cache) {
-			context.available_stock_cache = {};
-		}
+		context.invoiceTypes = ["Invoice", "Order"];
 	};
 
 	// Add this utility for grouping logic, matching ItemsTable.vue
